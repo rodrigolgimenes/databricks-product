@@ -1,0 +1,30 @@
+phase: "phase_n"
+date_utc: ""
+owner:
+  technical: ""
+  quality: ""
+  audit: ""
+requirements:
+  - id: ""
+    description: ""
+implementation:
+  pr_or_changeset: ""
+  components_touched: []
+tests:
+  unit: ""
+  integration: ""
+  e2e: ""
+  contract: ""
+  resiliency: ""
+artifacts:
+  logs: []
+  screenshots: []
+  metrics: []
+  audit_samples: []
+acceptance:
+  checklist:
+    - item: ""
+      status: "pending"
+  approved_by: ""
+  approved_at_utc: ""
+

@@ -1,0 +1,53 @@
+{
+  "dataset": "sales_orders",
+  "version": 1,
+  "description": "Sample dataset for governed ingestion demo",
+  "primary_key": [
+    "order_id"
+  ],
+  "order_column": "updated_at",
+  "watermark": {
+    "column": "updated_at",
+    "type": "timestamp"
+  },
+  "columns": [
+    {
+      "name": "order_id",
+      "type": "string",
+      "nullable": false
+    },
+    {
+      "name": "customer_id",
+      "type": "string",
+      "nullable": false
+    },
+    {
+      "name": "order_date",
+      "type": "date",
+      "nullable": false
+    },
+    {
+      "name": "updated_at",
+      "type": "timestamp",
+      "nullable": false
+    },
+    {
+      "name": "order_amount",
+      "type": "decimal",
+      "nullable": false,
+      "decimal": {
+        "precision": 12,
+        "scale": 2
+      }
+    },
+    {
+      "name": "order_status",
+      "type": "string",
+      "nullable": false
+    }
+  ],
+  "metadata": {
+    "domain": "sales",
+    "owner": "data-team@example.com"
+  }
+}

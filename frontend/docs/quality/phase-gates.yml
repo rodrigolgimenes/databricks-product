@@ -1,0 +1,28 @@
+phases:
+  phase_0:
+    required:
+      - "ADRs aprovados (001, 002, 003)"
+      - "Pipeline CI com build/testes"
+      - "Template de evidência definido"
+  phase_1:
+    required:
+      - "Data foundation entregue"
+      - "Reconciler idempotente validado"
+      - "Error signature disponível"
+      - "Baseline assíncrono disponível"
+  phase_2:
+    required:
+      - "Realtime Board funcional"
+      - "Run Detail funcional"
+      - "Incident Center com ACK/ASSIGN"
+  phase_3:
+    required:
+      - "Guardrails pós-run ativos"
+      - "SUCCEEDED_WITH_ISSUES operacional"
+      - "Scores heurísticos explicáveis"
+  phase_4:
+    required:
+      - "Policy engine mínimo funcionando"
+      - "Replay governado com approval T0/T1"
+      - "Auditoria de ações críticas disponível"
+

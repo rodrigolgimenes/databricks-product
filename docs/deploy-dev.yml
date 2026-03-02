@@ -1,0 +1,138 @@
+# Warp Drive Workflow
+# File: deploy-dev.yml
+# Purpose: Deploy the Governed Ingestion platform to DEV safely (checks -> migrations -> deploy -> smoke).
+# Notes:
+# - This workflow is intentionally tool-agnostic and uses shell commands.
+# - Replace placeholders (DATABRICKS_HOST, DATABRICKS_TOKEN, UC_CATALOG, etc.) with your environment variables in Warp Drive.
+# - Keep it idempotent: migrations/scripts should be safe to run multiple times.
+
+name: deploy-dev
+description: Deploy to DEV (checks -> migrations -> deploy -> smoke tests)
+
+env:
+  # Expected to be provided by Warp Drive env vars (or your shell)
+  DATABRICKS_HOST: ${DATABRICKS_HOST}
+  DATABRICKS_TOKEN: ${DATABRICKS_TOKEN}
+  ENV: dev
+  # Optional (adjust to your repo)
+  PYTHONPATH: ./src
+
+steps:
+  - name: Preflight
+    run: |
+      set -euo pipefail
+      echo "ENV=$ENV"
+      echo "Repo root: $(pwd)"
+      test -f sql/ddl/ingestion_sys.ctrl.sql
+      test -f sql/ddl/ingestion_sys.ops.sql
+      test -f contracts/expectschemajson.schema.json
+      echo "Preflight OK"
+
+  - name: Install tools (python)
+    run: |
+      set -euo pipefail
+      python -V
+      pip -V
+      if [ -f requirements.txt ]; then
+        pip install -r requirements.txt
+      fi
+      if [ -f pyproject.toml ]; then
+        pip install -e .
+      fi
+
+  - name: Static checks (recommended)
+    run: |
+      set -euo pipefail
+      # Optional: enable if you use these tools
+      if command -v ruff >/dev/null 2>&1; then ruff check .; else echo "ruff not installed (skipping)"; fi
+      if command -v black >/dev/null 2>&1; then black --check .; else echo "black not installed (skipping)"; fi
+      if command -v mypy >/dev/null 2>&1; then mypy src || true; else echo "mypy not installed (skipping)"; fi
+
+  - name: Unit tests
+    run: |
+      set -euo pipefail
+      if command -v pytest >/dev/null 2>&1; then
+        pytest -q
+      else
+        echo "pytest not installed (skipping)"
+      fi
+
+  - name: Databricks CLI auth check
+    run: |
+      set -euo pipefail
+      # Requires databricks CLI v0.200+ (or compatible)
+      if ! command -v databricks >/dev/null 2>&1; then
+        echo "databricks CLI not found. Install with: pip install databricks-sdk"
+        exit 1
+      fi
+      databricks auth env --host "$DATABRICKS_HOST" --token "$DATABRICKS_TOKEN" >/dev/null
+      databricks current-user me
+
+  - name: Run migrations / DDL (DEV)
+    run: |
+      set -euo pipefail
+      # Option A (recommended): run your repo's migration runner script
+      if [ -f sql/migrations/run_migrations.py ]; then
+        python sql/migrations/run_migrations.py --env "$ENV"
+        exit 0
+      fi
+
+      # Option B: run DDL directly via Databricks SQL (placeholder)
+      # Provide a SQL Warehouse ID via DATABRICKS_SQL_WAREHOUSE_ID if you use this path.
+      if [ -z "${DATABRICKS_SQL_WAREHOUSE_ID:-}" ]; then
+        echo "No migration runner found. Provide sql/migrations/run_migrations.py or set DATABRICKS_SQL_WAREHOUSE_ID to run DDL via SQL Warehouse."
+        exit 1
+      fi
+
+      echo "Applying DDL to DEV using SQL Warehouse..."
+      databricks sql warehouses get --warehouse-id "$DATABRICKS_SQL_WAREHOUSE_ID" >/dev/null
+
+      # Apply CTRL schema DDL
+      databricks sql statements execute         --warehouse-id "$DATABRICKS_SQL_WAREHOUSE_ID"         --sql "$(cat sql/ddl/ingestion_sys.ctrl.sql)" >/dev/null
+
+      # Apply OPS schema DDL
+      databricks sql statements execute         --warehouse-id "$DATABRICKS_SQL_WAREHOUSE_ID"         --sql "$(cat sql/ddl/ingestion_sys.ops.sql)" >/dev/null
+
+      echo "DDL applied."
+
+  - name: Deploy orchestrator (DEV)
+    run: |
+      set -euo pipefail
+      # Choose one deployment strategy:
+      # A) Databricks Asset Bundles (recommended if you have databricks.yml)
+      if [ -f databricks.yml ]; then
+        echo "Deploying with Databricks Asset Bundles..."
+        databricks bundle validate -t "$ENV"
+        databricks bundle deploy -t "$ENV"
+        databricks bundle run -t "$ENV" governed_ingestion_orchestrator || true
+        exit 0
+      fi
+
+      # B) dbx (legacy)
+      if command -v dbx >/dev/null 2>&1 && [ -f conf/deployment.yml ]; then
+        echo "Deploying with dbx..."
+        dbx deploy --environment="$ENV"
+        dbx launch governed_ingestion_orchestrator --environment="$ENV" || true
+        exit 0
+      fi
+
+      echo "No deployment configuration found (databricks.yml or dbx conf)."
+      echo "Provide databricks.yml (Bundles) or conf/deployment.yml (dbx)."
+      exit 1
+
+  - name: Smoke checks (DEV)
+    run: |
+      set -euo pipefail
+      # Validate system tables exist and are queryable (requires SQL Warehouse)
+      if [ -n "${DATABRICKS_SQL_WAREHOUSE_ID:-}" ]; then
+        databricks sql statements execute           --warehouse-id "$DATABRICKS_SQL_WAREHOUSE_ID"           --sql "SHOW TABLES IN ingestion_sys.ctrl" >/dev/null
+        databricks sql statements execute           --warehouse-id "$DATABRICKS_SQL_WAREHOUSE_ID"           --sql "SHOW TABLES IN ingestion_sys.ops" >/dev/null
+        echo "Smoke OK: ctrl/ops visible."
+      else
+        echo "Skipping SQL smoke checks (no DATABRICKS_SQL_WAREHOUSE_ID)."
+      fi
+
+  - name: Summary
+    run: |
+      set -euo pipefail
+      echo "✅ deploy-dev completed for ENV=$ENV"

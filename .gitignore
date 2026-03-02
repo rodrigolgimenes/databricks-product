@@ -1,0 +1,41 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Databricks / local env
+.env
+.env.*
+.env.txt
+.databricks/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Build artifacts
+/dist/
+/build/
+/public/
+
+# Logs
+*.log
+server.error.log
+server.log
+
+# Local temp files
+/tmp_*.json
+/tmp_*.py
+/temp_*.py
+/temp_*.js
+governed_ingestion.db

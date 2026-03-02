@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "expectschemajson.schema.json",
+  "title": "ExpectSchemaJSON",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dataset",
+    "version",
+    "columns"
+  ],
+  "properties": {
+    "dataset": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Logical dataset identifier (stable)."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonic schema version for the dataset."
+    },
+    "description": {
+      "type": "string"
+    },
+    "primary_key": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Columns that uniquely identify records in Silver and are used for MERGE."
+    },
+    "order_column": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Deterministic ordering column used for Last Write Wins (e.g., updated_at, event_time, _ingestion_ts)."
+    },
+    "watermark": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "column",
+        "type"
+      ],
+      "properties": {
+        "column": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "timestamp",
+            "numeric",
+            "string"
+          ]
+        }
+      },
+      "description": "Incremental processing watermark definition."
+    },
+    "columns": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "type",
+          "nullable"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "boolean",
+              "byte",
+              "short",
+              "int",
+              "long",
+              "float",
+              "double",
+              "decimal",
+              "string",
+              "date",
+              "timestamp",
+              "binary"
+            ],
+            "description": "Spark/Delta-friendly primitive types. Use decimal with precision/scale."
+          },
+          "decimal": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "precision",
+              "scale"
+            ],
+            "properties": {
+              "precision": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 38
+              },
+              "scale": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 38
+              }
+            },
+            "description": "Required when type == 'decimal'."
+          },
+          "nullable": {
+            "type": "boolean"
+          },
+          "comment": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uniqueItems": true,
+            "description": "Optional alternative source column names accepted during ingestion."
+          },
+          "transform": {
+            "type": "string",
+            "enum": [
+              "none",
+              "trim",
+              "upper",
+              "lower"
+            ],
+            "description": "Optional simple transform applied before cast (MVP)."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "decimal"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "decimal"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "not": {
+                    "const": "decimal"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "decimal": false
+              }
+            }
+          }
+        ]
+      },
+      "description": "Column contract for Silver."
+    },
+    "quality_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rule",
+          "column"
+        ],
+        "properties": {
+          "rule": {
+            "type": "string",
+            "enum": [
+              "not_null",
+              "in_set",
+              "regex",
+              "min",
+              "max"
+            ]
+          },
+          "column": {
+            "type": "string",
+            "minLength": 1
+          },
+          "params": {
+            "type": "object"
+          }
+        }
+      },
+      "description": "Optional MVP rules (evaluated after cast)."
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Free-form metadata (owner, domain, tags, etc.)."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "primary_key"
+        ]
+      },
+      "then": {
+        "required": [
+          "order_column"
+        ]
+      },
+      "description": "If primary_key exists, order_column is required for deterministic LWW dedupe."
+    }
+  ]
+}

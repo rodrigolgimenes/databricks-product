@@ -1,0 +1,98 @@
+/* DataOps Grid - Compact Theme */
+.dataops-grid {
+  --ag-font-size: 13px;
+  --ag-row-height: 36px;
+  --ag-header-height: 40px;
+  --ag-cell-horizontal-padding: 8px;
+  --ag-row-border-color: #e5e7eb;
+  --ag-header-background-color: #f9fafb;
+  --ag-odd-row-background-color: #ffffff;
+  --ag-row-hover-color: #f3f4f6;
+}
+
+.dataops-grid .ag-header {
+  font-weight: 500;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.dataops-grid .ag-header-cell-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dataops-grid .ag-row {
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.dataops-grid .ag-row:hover {
+  cursor: pointer;
+}
+
+.dataops-grid .ag-cell {
+  display: flex;
+  align-items: center;
+  line-height: 1.2;
+}
+
+/* Pinned columns shadow */
+.dataops-grid .ag-pinned-left-cols-container {
+  box-shadow: 2px 0 4px rgba(0, 0, 0, 0.05);
+}
+
+/* Floating filters */
+.dataops-grid .ag-floating-filter {
+  background: #fafafa;
+  height: 36px;
+}
+
+.dataops-grid .ag-floating-filter-input {
+  font-size: 12px;
+  padding: 4px 6px;
+  height: 28px;
+  box-sizing: border-box;
+}
+
+.dataops-grid .ag-floating-filter-button {
+  margin-top: 2px;
+}
+
+/* Top scroll bar styling */
+.top-scroll-bar {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+}
+
+.top-scroll-bar::-webkit-scrollbar {
+  height: 8px;
+}
+
+.top-scroll-bar::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+.top-scroll-bar::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+.top-scroll-bar::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Loading overlay */
+.dataops-grid .ag-overlay-loading-center {
+  background: rgba(255, 255, 255, 0.9);
+  padding: 20px;
+  border-radius: 8px;
+}
+
+/* Filter menu improvements */
+.dataops-grid .ag-filter {
+  font-size: 13px;
+}
+
+.dataops-grid .ag-filter-apply-panel-button {
+  font-size: 12px;
+}

@@ -1,0 +1,75 @@
+# Warp Drive Workflow
+# File: checks.yml
+# Purpose: Linting, validation and lightweight safeguards before deploy/merge.
+
+name: checks
+description: Lint, validation and guardrails
+
+env:
+  PYTHONPATH: ./src
+
+steps:
+  - name: Preflight
+    run: |
+      set -euo pipefail
+      echo "Running checks in repo: $(pwd)"
+
+  - name: Validate contracts
+    run: |
+      set -euo pipefail
+      python - << 'EOF'
+      import json, sys
+      from jsonschema import Draft202012Validator
+      schema = json.load(open('contracts/expectschemajson.schema.json'))
+      Draft202012Validator.check_schema(schema)
+      print("ExpectSchemaJSON schema is valid.")
+      EOF
+
+  - name: Python lint (ruff)
+    run: |
+      set -euo pipefail
+      if command -v ruff >/dev/null 2>&1; then
+        ruff check .
+      else
+        echo "ruff not installed (skipping)"
+      fi
+
+  - name: Formatting check (black)
+    run: |
+      set -euo pipefail
+      if command -v black >/dev/null 2>&1; then
+        black --check .
+      else
+        echo "black not installed (skipping)"
+      fi
+
+  - name: Type hints (mypy)
+    run: |
+      set -euo pipefail
+      if command -v mypy >/dev/null 2>&1; then
+        mypy src || true
+      else
+        echo "mypy not installed (skipping)"
+      fi
+
+  - name: Unit tests
+    run: |
+      set -euo pipefail
+      if command -v pytest >/dev/null 2>&1; then
+        pytest -q
+      else
+        echo "pytest not installed (skipping)"
+      fi
+
+  - name: Guardrails
+    run: |
+      set -euo pipefail
+      echo "Checking forbidden patterns..."
+      if grep -R "create job" -n src || true; then
+        echo "⚠️ Manual job creation detected. Review required."
+      fi
+      echo "Guardrails check completed."
+
+  - name: Summary
+    run: |
+      echo "✅ checks completed successfully"

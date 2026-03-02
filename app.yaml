@@ -1,0 +1,14 @@
+command:
+  - npm
+  - run
+  - start
+
+env:
+  - name: APP_TITLE
+    value: Data Load Tools
+  - name: APP_ENV
+    value: prod
+  - name: UC_CATALOG
+    value: cm_dbx_dev
+  - name: DATABRICKS_SQL_WAREHOUSE_ID
+    value: 4e4f36c4c611f1d3

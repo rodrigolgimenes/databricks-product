@@ -1,0 +1,47 @@
+phase: "phase_0_to_4_incremental_frontend"
+date_utc: "2026-03-01T21:39:23Z"
+owner:
+  technical: "oz-agent"
+  quality: "oz-agent"
+  audit: "oz-agent"
+requirements:
+  - id: "R-ADR"
+    description: "ADRs mandatórias formalizadas"
+  - id: "R-OPS-CORE"
+    description: "Realtime, Incidents, Replay Center entregues no frontend"
+  - id: "R-NON-NEGOTIABLE"
+    description: "Reconciliação idempotente, assinatura de erro e guardrails com SUCCEEDED_WITH_ISSUES"
+implementation:
+  pr_or_changeset: "workspace-local"
+  components_touched:
+    - "src/lib/ops-control-plane.ts"
+    - "src/pages/OpsRealtime.tsx"
+    - "src/pages/OpsIncidents.tsx"
+    - "src/pages/OpsReplayCenter.tsx"
+    - "src/lib/api.ts"
+tests:
+  unit: "npm run test:run"
+  integration: "pending-backend-e2e"
+  e2e: "pending-backend-e2e"
+  contract: "pending-backend-contract-test"
+  resiliency: "fallback mocks validated in UI paths"
+artifacts:
+  logs:
+    - "test output from vitest"
+  screenshots:
+    - "ops pages available via /ops/realtime, /ops/incidents, /ops/replay"
+  metrics:
+    - "unit tests for core control-plane rules"
+  audit_samples:
+    - "ack/assign/resolve actions implemented through API commands with fallback"
+acceptance:
+  checklist:
+    - item: "Rotas Ops registradas"
+      status: "done"
+    - item: "Backlog executável versionado"
+      status: "done"
+    - item: "Testes unitários do core Ops"
+      status: "done"
+  approved_by: "pending-human-approval"
+  approved_at_utc: ""
+

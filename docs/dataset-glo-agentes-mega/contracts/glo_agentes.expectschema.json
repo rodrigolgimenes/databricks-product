@@ -1,0 +1,420 @@
+{
+  "dataset": "glo_agentes",
+  "version": 1,
+  "description": "MEGA ERP - tabela GLO_AGENTES (CMASTER) - dataset de teste governado",
+  "primary_key": [
+    "AGN_TAB_IN_CODIGO",
+    "AGN_PAD_IN_CODIGO",
+    "AGN_IN_CODIGO"
+  ],
+  "order_column": "AGN_DT_ULTIMAATUCAD",
+  "watermark": {
+    "column": "AGN_DT_ULTIMAATUCAD",
+    "type": "timestamp"
+  },
+  "columns": [
+    {
+      "name": "AGN_TAB_IN_CODIGO",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_PAD_IN_CODIGO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_IN_CODIGO",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_BO_CONSOLIDADOR",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_FANTASIA",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_NOME",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_CH_TIPOPESSOAFJ",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_IN_NATJURID",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_INSCRMUNIC",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "UF_ST_SIGLA",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "PA_ST_SIGLA",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "MUN_IN_CODIGO",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_MUNICIPIO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "TPL_ST_SIGLA",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_LOGRADOURO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_NUMERO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_BAIRRO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_CEP",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_CXPOSTAL",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_COMPLEMENTO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_CEPCXPOSTAL",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_REFERENCIA",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_ENQUADRAIPI",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_ENQUADRAICMS",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_ENQUADRAISS",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_CGC",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_CH_STATUSCGC",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_FRETEPESOVALOR",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_INSCRESTADUAL",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "PAI_AGN_TAB_IN_CODIGO",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_ATIVECONOMICA",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "PAI_AGN_PAD_IN_CODIGO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "PAI_AGN_IN_CODIGO",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_SUFRAMA",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_REPARTICAO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_EMAIL",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_BO_IPISIMPLES",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_BO_ICMSSIMPLES",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_BO_ISSSIMPLES",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_BO_SIMPLES",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "FORP_IN_CODIGO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_BO_FLUXO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_IN_NIVEL",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_ORDEM",
+      "type": "long",
+      "nullable": true
+    },
+    {
+      "name": "AGN_DT_ULTIMAATUCAD",
+      "type": "timestamp",
+      "nullable": true
+    },
+    {
+      "name": "AGN_IN_VALIDADECAD",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_CEI",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_CH_TIPOINSCRICAO",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_CH_ENQUADRAMENTO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "CNAE_ST_CODIGO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_BO_RETERIR",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_BO_RETERINSS",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_URL",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_APELIDO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_SENHA",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_CH_STATUSINSCRESTADUAL",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_BO_PUBLICO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_INSCRPRODUTOR",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "USU_IN_INCLUSAO",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_CH_RURALTIPOPESSOAFJ",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "TAB05_IN_CODIGO",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_NRCAEPF",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_NRCNO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_CH_TIPODESPADUANEIRA",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_IN_TIPOCAEPF",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_CH_NATRETPISCOFINS",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_PISMEI",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_BO_DISPENSADONIF",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_NIF",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "DFP_IN_CODIGO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_BO_RATEIOAFRMM",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_CH_TIPOAFRMM",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_CBOMEI",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_IDESTRANGEIRO",
+      "type": "int",
+      "nullable": true
+    },
+    {
+      "name": "AGN_RE_LATITUDE",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_RE_LONGITUDE",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_OUTROSEMAILS",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_CH_STATUSCADWIIPO",
+      "type": "string",
+      "nullable": true
+    },
+    {
+      "name": "AGN_ST_MOTIVOWIIPO",
+      "type": "string",
+      "nullable": true
+    }
+  ],
+  "metadata": {
+    "source": "ORACLE",
+    "oracle_owner": "CMASTER",
+    "oracle_table": "GLO_AGENTES",
+    "oracle_dblink": "CMASTERPRD",
+    "domain": "mega_erp",
+    "notes": "Contrato inicial inferido de amostra CSV; revisar tipos/nullable conforme DDL Oracle."
+  }
+}

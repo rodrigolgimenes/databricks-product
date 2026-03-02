@@ -1,0 +1,85 @@
+program: "ops-control-plane"
+epics:
+  - id: "E0"
+    name: "Governança e preparação"
+    phase: "phase_0"
+    stories:
+      - id: "E0-S1"
+        title: "Formalizar ADRs mandatórias"
+        done_when:
+          - "ADRs 001/002/003 versionadas"
+          - "Revisão técnica aprovada"
+        evidence:
+          - "docs/adr/*"
+      - id: "E0-S2"
+        title: "Definir quality gates e template de evidência"
+        done_when:
+          - "phase-gates definido"
+          - "template de evidência definido"
+        evidence:
+          - "docs/quality/phase-gates.yml"
+          - "docs/quality/evidence-template.yml"
+  - id: "E1"
+    name: "Data foundation"
+    phase: "phase_1"
+    stories:
+      - id: "E1-S1"
+        title: "Implementar contratos de estado e reconciliação idempotente"
+        done_when:
+          - "Lógica de reconciliação implementada"
+          - "Testes unitários verdes"
+        evidence:
+          - "src/lib/ops-control-plane.ts"
+          - "src/lib/ops-control-plane.test.ts"
+      - id: "E1-S2"
+        title: "Implementar assinatura de erro normalizada"
+        done_when:
+          - "buildErrorSignature disponível"
+          - "Teste de estabilidade por normalização aprovado"
+        evidence:
+          - "src/lib/ops-control-plane.ts"
+          - "src/lib/ops-control-plane.test.ts"
+  - id: "E2"
+    name: "Operational core"
+    phase: "phase_2"
+    stories:
+      - id: "E2-S1"
+        title: "Realtime Board Ops"
+        done_when:
+          - "Tela de atenção e running entregue"
+          - "Fallback em indisponibilidade de API"
+        evidence:
+          - "src/pages/OpsRealtime.tsx"
+      - id: "E2-S2"
+        title: "Incident Center Ops"
+        done_when:
+          - "Ações ACK/ASSIGN/RESOLVE disponíveis"
+          - "Lista deduplicada exibida"
+        evidence:
+          - "src/pages/OpsIncidents.tsx"
+  - id: "E3"
+    name: "Reliability controls"
+    phase: "phase_3"
+    stories:
+      - id: "E3-S1"
+        title: "Guardrails declarativos e SUCCEEDED_WITH_ISSUES"
+        done_when:
+          - "evaluateGuardrails implementado"
+          - "Transição para SUCCEEDED_WITH_ISSUES testada"
+        evidence:
+          - "src/lib/ops-control-plane.ts"
+          - "src/components/ops/GuardrailChecklist.tsx"
+          - "src/lib/ops-control-plane.test.ts"
+  - id: "E4"
+    name: "Safe replay"
+    phase: "phase_4"
+    stories:
+      - id: "E4-S1"
+        title: "Replay center com avaliação de policy"
+        done_when:
+          - "Avaliação ALLOWED/NEEDS_APPROVAL/BLOCKED disponível"
+          - "Ação de solicitação de replay disponível"
+        evidence:
+          - "src/pages/OpsReplayCenter.tsx"
+          - "src/lib/api.ts"
+

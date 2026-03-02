@@ -1,0 +1,18 @@
+{
+  "name": "governed_ingestion_orchestrator",
+  "max_concurrent_runs": 1,
+  "tasks": [
+    {
+      "task_key": "orchestrator",
+      "existing_cluster_id": "1211-195643-11ppw5cg",
+      "notebook_task": {
+        "notebook_path": "/Users/reportflex.ulisses@civilmaster.com.br/governed_ingestion/governed_ingestion_orchestrator",
+        "base_parameters": {
+          "catalog": "cm_dbx_dev",
+          "max_items": "5",
+          "max_parallelism": "1"
+        }
+      }
+    }
+  ]
+}

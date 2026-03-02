@@ -1,0 +1,56 @@
+# Warp Drive Workflow
+# File: run-migrations.yml
+# Purpose: Apply database migrations and DDL safely (idempotent).
+# Scope: ingestion_sys.ctrl and ingestion_sys.ops
+
+name: run-migrations
+description: Run database migrations and DDL (idempotent)
+
+env:
+  DATABRICKS_HOST: ${DATABRICKS_HOST}
+  DATABRICKS_TOKEN: ${DATABRICKS_TOKEN}
+  ENV: ${ENV:-dev}
+
+steps:
+  - name: Preflight
+    run: |
+      set -euo pipefail
+      test -f sql/ddl/ingestion_sys.ctrl.sql
+      test -f sql/ddl/ingestion_sys.ops.sql
+      echo "Preflight OK"
+
+  - name: Databricks CLI auth
+    run: |
+      set -euo pipefail
+      if ! command -v databricks >/dev/null 2>&1; then
+        pip install databricks-sdk
+      fi
+      databricks auth env --host "$DATABRICKS_HOST" --token "$DATABRICKS_TOKEN" >/dev/null
+
+  - name: Run migration runner (preferred)
+    run: |
+      set -euo pipefail
+      if [ -f sql/migrations/run_migrations.py ]; then
+        python sql/migrations/run_migrations.py --env "$ENV"
+        echo "Migrations executed via runner."
+        exit 0
+      fi
+      echo "No migration runner found, falling back to SQL Warehouse."
+
+  - name: Apply DDL via SQL Warehouse
+    run: |
+      set -euo pipefail
+      if [ -z "${DATABRICKS_SQL_WAREHOUSE_ID:-}" ]; then
+        echo "DATABRICKS_SQL_WAREHOUSE_ID not set."
+        exit 1
+      fi
+
+      databricks sql statements execute         --warehouse-id "$DATABRICKS_SQL_WAREHOUSE_ID"         --sql "$(cat sql/ddl/ingestion_sys.ctrl.sql)"
+
+      databricks sql statements execute         --warehouse-id "$DATABRICKS_SQL_WAREHOUSE_ID"         --sql "$(cat sql/ddl/ingestion_sys.ops.sql)"
+
+      echo "DDL applied successfully."
+
+  - name: Summary
+    run: |
+      echo "✅ run-migrations completed for ENV=$ENV"

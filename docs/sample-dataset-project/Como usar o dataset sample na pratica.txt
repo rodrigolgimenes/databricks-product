@@ -1,0 +1,32 @@
+🎯 Como usar esse sample na prática
+Para demo / onboarding
+
+Importar o ZIP
+
+Rodar register_dataset.sql em DEV
+
+Salvar sales_orders.expectschema.json como schema v1
+
+Enfileirar execução via run_queue
+
+Mostrar:
+
+execução
+
+métricas
+
+preview Silver
+
+governança de schema
+
+Para Warp
+
+Anexar:
+
+o contrato
+
+o spec da fase
+
+Pedir:
+
+“Implemente esse dataset seguindo todos os ADRs e a Fase 02”
