@@ -27,6 +27,7 @@ const statusConfig: Record<string, {
   INCONSISTENT: { variant: "outline", icon: AlertCircle, iconClass: "text-violet-600" },
   TIMED_OUT: { variant: "destructive", icon: AlertCircle, iconClass: "text-orange-700" },
   CANCELLED: { variant: "outline", icon: XCircle, iconClass: "text-zinc-500" },
+  PARTIAL: { variant: "secondary", icon: AlertCircle, iconClass: "text-orange-500" },
 };
 
 const fallbackConfig = { variant: "outline" as const, icon: XCircle, iconClass: "text-gray-400" };

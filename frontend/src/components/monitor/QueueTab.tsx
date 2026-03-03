@@ -40,6 +40,8 @@ export function QueueTab({ pollingInterval, isActive }: QueueTabProps) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<Record<string, string>>({});
+  const [sortKey, setSortKey] = useState("");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const fetchData = useCallback(async () => {
     try {
@@ -48,6 +50,8 @@ export function QueueTab({ pollingInterval, isActive }: QueueTabProps) {
         page_size: pageSize,
         search: search || undefined,
         status: filters.status && filters.status !== "all" ? filters.status : undefined,
+        sort_key: sortKey || undefined,
+        sort_dir: sortDir,
       });
       setData(result.items || []);
       setTotal(result.total || 0);
@@ -56,7 +60,7 @@ export function QueueTab({ pollingInterval, isActive }: QueueTabProps) {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, search, filters]);
+  }, [page, pageSize, search, filters, sortKey, sortDir]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -79,6 +83,7 @@ export function QueueTab({ pollingInterval, isActive }: QueueTabProps) {
     {
       key: "dataset_name",
       header: "Dataset",
+      sortable: true,
       render: (row) => (
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -94,33 +99,29 @@ export function QueueTab({ pollingInterval, isActive }: QueueTabProps) {
               <Badge variant="outline" className="text-[10px] flex-shrink-0">{row.source_type}</Badge>
             )}
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <p className="text-xs text-muted-foreground cursor-help">
-                {row.requested_at ? new Date(row.requested_at).toLocaleDateString("pt-BR") : "—"} · {row.trigger_type} · por {row.requested_by || "—"}
-              </p>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p className="text-xs">{formatTs(row.requested_at)}</p>
-            </TooltipContent>
-          </Tooltip>
+          <p className="text-xs text-muted-foreground">
+            {formatTs(row.requested_at)} · {row.trigger_type} · por {row.requested_by || "—"}
+          </p>
         </div>
       ),
     },
     {
       key: "status",
       header: "Status",
+      sortable: true,
       render: (row) => <StatusBadge status={row.status} />,
     },
     {
       key: "priority",
       header: "Prioridade",
+      sortable: true,
       className: "text-center",
       render: (row) => <span className="text-xs font-mono">{row.priority ?? "—"}</span>,
     },
     {
       key: "attempt",
       header: "Tentativa",
+      sortable: true,
       className: "text-center",
       render: (row) => <span className="text-xs font-mono">{row.attempt}/{row.max_retries}</span>,
     },
@@ -165,6 +166,9 @@ export function QueueTab({ pollingInterval, isActive }: QueueTabProps) {
         pageSize={pageSize}
         onPageChange={setPage}
         onPageSizeChange={setPageSize}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onSort={(key, dir) => { setSortKey(key); setSortDir(dir); setPage(1); }}
         loading={loading}
         emptyIcon={<Database className="h-10 w-10" />}
         emptyMessage="Fila vazia."

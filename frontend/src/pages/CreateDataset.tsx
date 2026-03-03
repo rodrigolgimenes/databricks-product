@@ -15,8 +15,15 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
   ArrowLeft, ArrowRight, CheckCircle, Database, Loader2,
-  List, FileSpreadsheet, XCircle, Copy, AlertTriangle, Pencil, Check, X, Settings,
+  List, FileSpreadsheet, XCircle, Copy, AlertTriangle, Pencil, Check, X, Settings, Plus,
 } from "lucide-react";
 import * as api from "@/lib/api";
 import BatchProgressOverlay from "@/components/BatchProgressOverlay";
@@ -115,6 +122,16 @@ const CreateDataset = () => {
   // Naming convention manager modal
   const [showConventionManager, setShowConventionManager] = useState(false);
 
+  // Create project/area dialogs
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectDesc, setNewProjectDesc] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [showCreateArea, setShowCreateArea] = useState(false);
+  const [newAreaName, setNewAreaName] = useState("");
+  const [newAreaDesc, setNewAreaDesc] = useState("");
+  const [creatingArea, setCreatingArea] = useState(false);
+
   const loadNamingConventions = () => {
     api.getNamingConventions()
       .then((d) => {
@@ -194,6 +211,43 @@ const CreateDataset = () => {
       return validated && (bulkSummary?.valid ?? 0) > 0;
     }
     return true;
+  };
+
+  const handleCreateProject = async () => {
+    if (!newProjectName.trim()) return;
+    setCreatingProject(true);
+    try {
+      const res = await api.createProject({ project_name: newProjectName.trim(), description: newProjectDesc.trim() || undefined });
+      const created = res.item;
+      setProjects((prev) => [...prev, created]);
+      setProjectId(created.project_id);
+      setAreaId("");
+      setShowCreateProject(false);
+      setNewProjectName("");
+      setNewProjectDesc("");
+    } catch (e: any) {
+      setError(e.message || "Erro ao criar projeto");
+    } finally {
+      setCreatingProject(false);
+    }
+  };
+
+  const handleCreateArea = async () => {
+    if (!newAreaName.trim() || !projectId) return;
+    setCreatingArea(true);
+    try {
+      const res = await api.createArea({ project_id: projectId, area_name: newAreaName.trim(), description: newAreaDesc.trim() || undefined });
+      const created = res.item;
+      setAreas((prev) => [...prev, created]);
+      setAreaId(created.area_id);
+      setShowCreateArea(false);
+      setNewAreaName("");
+      setNewAreaDesc("");
+    } catch (e: any) {
+      setError(e.message || "Erro ao criar área");
+    } finally {
+      setCreatingArea(false);
+    }
   };
 
   const handleValidate = async () => {
@@ -574,18 +628,23 @@ const CreateDataset = () => {
                     </Button>
                   </div>
                 ) : (
-                  <Select value={projectId} onValueChange={(v) => { setProjectId(v); setAreaId(""); }}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecione o projeto" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {projects.map((p) => (
-                        <SelectItem key={p.project_id} value={p.project_id}>
-                          {p.project_name} {!p.is_active && "(inativo)"}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex gap-2">
+                    <Select value={projectId} onValueChange={(v) => { setProjectId(v); setAreaId(""); }}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione o projeto" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {projects.map((p) => (
+                          <SelectItem key={p.project_id} value={p.project_id}>
+                            {p.project_name} {!p.is_active && "(inativo)"}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button type="button" variant="outline" size="icon" onClick={() => setShowCreateProject(true)} title="Criar novo projeto">
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
                 )}
               </div>
               <div className="space-y-2">
@@ -660,18 +719,23 @@ const CreateDataset = () => {
                     </Button>
                   </div>
                 ) : (
-                  <Select value={areaId} onValueChange={setAreaId} disabled={!projectId}>
-                    <SelectTrigger>
-                      <SelectValue placeholder={projectId ? "Selecione a área" : "Selecione um projeto primeiro"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {areas.map((a) => (
-                        <SelectItem key={a.area_id} value={a.area_id}>
-                          {a.area_name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex gap-2">
+                    <Select value={areaId} onValueChange={setAreaId} disabled={!projectId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder={projectId ? "Selecione a área" : "Selecione um projeto primeiro"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {areas.map((a) => (
+                          <SelectItem key={a.area_id} value={a.area_id}>
+                            {a.area_name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button type="button" variant="outline" size="icon" onClick={() => setShowCreateArea(true)} disabled={!projectId} title="Criar nova área">
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
                 )}
               </div>
             </>
@@ -1209,6 +1273,90 @@ const CreateDataset = () => {
         onSelect={(version) => setSelectedConvention(version)}
         onConventionChanged={loadNamingConventions}
       />
+
+      {/* Create Project Dialog */}
+      <Dialog open={showCreateProject} onOpenChange={(open) => { if (!open) { setShowCreateProject(false); setNewProjectName(""); setNewProjectDesc(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Novo Projeto</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="new-project-name">Nome do Projeto <span className="text-destructive">*</span></Label>
+              <Input
+                id="new-project-name"
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                placeholder="Ex: CRM, ERP, Data Lake"
+                autoFocus
+                onKeyDown={(e) => { if (e.key === "Enter" && newProjectName.trim()) handleCreateProject(); }}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-project-desc">Descrição (opcional)</Label>
+              <Textarea
+                id="new-project-desc"
+                value={newProjectDesc}
+                onChange={(e) => setNewProjectDesc(e.target.value)}
+                placeholder="Breve descrição do projeto"
+                rows={2}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowCreateProject(false); setNewProjectName(""); setNewProjectDesc(""); }} disabled={creatingProject}>
+              Cancelar
+            </Button>
+            <Button onClick={handleCreateProject} disabled={creatingProject || !newProjectName.trim()}>
+              {creatingProject ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Criando...</> : "Criar Projeto"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Area Dialog */}
+      <Dialog open={showCreateArea} onOpenChange={(open) => { if (!open) { setShowCreateArea(false); setNewAreaName(""); setNewAreaDesc(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Nova Área</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-sm text-muted-foreground">Projeto</Label>
+              <p className="text-sm font-medium">{projects.find((p) => p.project_id === projectId)?.project_name || projectId}</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-area-name">Nome da Área <span className="text-destructive">*</span></Label>
+              <Input
+                id="new-area-name"
+                value={newAreaName}
+                onChange={(e) => setNewAreaName(e.target.value)}
+                placeholder="Ex: mega, financeiro, rh"
+                autoFocus
+                onKeyDown={(e) => { if (e.key === "Enter" && newAreaName.trim()) handleCreateArea(); }}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-area-desc">Descrição (opcional)</Label>
+              <Textarea
+                id="new-area-desc"
+                value={newAreaDesc}
+                onChange={(e) => setNewAreaDesc(e.target.value)}
+                placeholder="Breve descrição da área"
+                rows={2}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowCreateArea(false); setNewAreaName(""); setNewAreaDesc(""); }} disabled={creatingArea}>
+              Cancelar
+            </Button>
+            <Button onClick={handleCreateArea} disabled={creatingArea || !newAreaName.trim()}>
+              {creatingArea ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Criando...</> : "Criar Área"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

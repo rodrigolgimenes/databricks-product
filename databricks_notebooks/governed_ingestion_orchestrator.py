@@ -50,8 +50,8 @@ CATALOG = _get_widget("catalog", "cm_dbx_dev")
 CTRL = f"{CATALOG}.ingestion_sys_ctrl"
 OPS = f"{CATALOG}.ingestion_sys_ops"
 
-MAX_ITEMS = int(_get_widget("max_items", "5"))
-MAX_PARALLELISM = int(_get_widget("max_parallelism", "1"))  # MVP: 1
+MAX_ITEMS = int(_get_widget("max_items", "200"))
+MAX_PARALLELISM = int(_get_widget("max_parallelism", "5"))  # Batch size: datasets processed per round
 TARGET_DATASET_ID = _get_widget("target_dataset_id", "").strip()  # Targeted execution
 JOB_ID = _get_widget("job_id", "").strip()  # Scheduled job ID (for job-based execution)
 
@@ -2462,16 +2462,41 @@ failed_rows = spark.sql(  # type: ignore[name-defined]
 pending_items = [r.asDict(recursive=True) for r in pending_rows]
 failed_items = [r.asDict(recursive=True) for r in failed_rows]
 
-# Claim jobs (job-based, targeted, or batch mode)
-items = claim_pending(MAX_ITEMS, target_dataset_id=TARGET_DATASET_ID, job_id=JOB_ID)
-print(f"claimed={len(items)}")
-
+# Claim and process in batches of MAX_PARALLELISM to limit concurrent DB connections
+# (prevents ORA-12516 / TNS:listener exhaustion when processing many Oracle datasets)
 results = []
-for it in items:
-    results.append(run_one(it))
+total_claimed = 0
+batch_num = 0
+
+while total_claimed < MAX_ITEMS:
+    batch_num += 1
+    batch_size = min(MAX_PARALLELISM, MAX_ITEMS - total_claimed)
+
+    print(f"\n[BATCH {batch_num}] Claiming up to {batch_size} items (total so far: {total_claimed}/{MAX_ITEMS})...")
+    try:
+        items = claim_pending(batch_size, target_dataset_id=TARGET_DATASET_ID, job_id=JOB_ID)
+    except ValueError:
+        # claim_pending raises ValueError when targeted dataset not found — stop gracefully
+        if total_claimed > 0:
+            print(f"[BATCH {batch_num}] No more pending items. Stopping.")
+            break
+        raise
+
+    if not items:
+        print(f"[BATCH {batch_num}] No more pending items. Stopping.")
+        break
+
+    print(f"[BATCH {batch_num}] Processing {len(items)} items...")
+    for it in items:
+        results.append(run_one(it))
+
+    total_claimed += len(items)
+    print(f"[BATCH {batch_num}] ✓ Batch complete. Total processed: {total_claimed}")
+
+print(f"\n[ORCHESTRATOR] All batches complete. Total claimed: {total_claimed}, Results: {len(results)}")
 
 payload = {
-    "claimed": len(items),
+    "claimed": total_claimed,
     "eligible_pending": eligible_pending,
     "status_counts": status_counts,
     "pending_items": pending_items,
@@ -2495,7 +2520,7 @@ for status, count in sorted(status_counts.items()):
     print(f"  {emoji} {status}: {count}")
 
 print(f"\n⏱️  Pending Elegíveis (agora): {eligible_pending}")
-print(f"✅ Jobs Claimed nesta execução: {len(items)}")
+print(f"✅ Jobs Claimed nesta execução: {total_claimed} (em {batch_num} batches de {MAX_PARALLELISM})")
 
 if results:
     print("\n📄 Resultados da Execução:")

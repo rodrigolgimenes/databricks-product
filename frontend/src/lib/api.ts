@@ -143,6 +143,9 @@ export const createNamingConvention = (body: {
 export const activateNamingConvention = (version: number) =>
   request(`/admin/naming-conventions/${version}/activate`, { method: "POST" });
 
+export const deactivateNamingConvention = (version: number) =>
+  request(`/admin/naming-conventions/${version}/deactivate`, { method: "POST" });
+
 export const updateNamingConvention = (version: number, body: {
   bronze_pattern?: string;
   silver_pattern?: string;
@@ -317,6 +320,10 @@ export const getRecentBatchProcesses = (params: {
   search?: string;
   status?: string;
   period?: string;
+  date_from?: string;
+  date_to?: string;
+  sort_key?: string;
+  sort_dir?: string;
 } = {}) => {
   const qs = new URLSearchParams();
   if (params.page) qs.set("page", String(params.page));
@@ -324,6 +331,10 @@ export const getRecentBatchProcesses = (params: {
   if (params.search) qs.set("search", params.search);
   if (params.status) qs.set("status", params.status);
   if (params.period) qs.set("period", params.period);
+  if (params.date_from) qs.set("date_from", params.date_from);
+  if (params.date_to) qs.set("date_to", params.date_to);
+  if (params.sort_key) qs.set("sort_key", params.sort_key);
+  if (params.sort_dir) qs.set("sort_dir", params.sort_dir);
   const q = qs.toString();
   return request(`/monitor/batch-processes/recent${q ? `?${q}` : ""}`);
 };
@@ -332,12 +343,16 @@ export const getQueue = (params: {
   page_size?: number;
   status?: string;
   search?: string;
+  sort_key?: string;
+  sort_dir?: string;
 } = {}) => {
   const qs = new URLSearchParams();
   if (params.page) qs.set("page", String(params.page));
   if (params.page_size) qs.set("page_size", String(params.page_size));
   if (params.status) qs.set("status", params.status);
   if (params.search) qs.set("search", params.search);
+  if (params.sort_key) qs.set("sort_key", params.sort_key);
+  if (params.sort_dir) qs.set("sort_dir", params.sort_dir);
   const q = qs.toString();
   return request(`/monitor/queue${q ? `?${q}` : ""}`);
 };
@@ -345,11 +360,15 @@ export const getFailedJobs = (params: {
   page?: number;
   page_size?: number;
   search?: string;
+  sort_key?: string;
+  sort_dir?: string;
 } = {}) => {
   const qs = new URLSearchParams();
   if (params.page) qs.set("page", String(params.page));
   if (params.page_size) qs.set("page_size", String(params.page_size));
   if (params.search) qs.set("search", params.search);
+  if (params.sort_key) qs.set("sort_key", params.sort_key);
+  if (params.sort_dir) qs.set("sort_dir", params.sort_dir);
   const q = qs.toString();
   return request(`/monitor/queue/failed${q ? `?${q}` : ""}`);
 };
@@ -382,6 +401,12 @@ export const getSupabaseTableInfo = (tableName: string, schema?: string) =>
 export const getSupabaseSchemas = () => request("/supabase/schemas");
 
 // Projects and Areas Management
+export const createProject = (body: { project_name: string; description?: string }) =>
+  request("/projects", { method: "POST", body: JSON.stringify(body) });
+
+export const createArea = (body: { project_id: string; area_name: string; description?: string }) =>
+  request("/areas", { method: "POST", body: JSON.stringify(body) });
+
 export const updateProjectName = (projectId: string, newName: string) =>
   request(`/projects/${projectId}`, {
     method: "PUT",
@@ -434,6 +459,7 @@ export const updateJob = (jobId: string, body: {
   max_concurrent_runs?: number;
   timeout_seconds?: number;
   retry_on_timeout?: boolean;
+  dataset_ids?: string[];
 }) => request(`/jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(body) });
 export const toggleJob = (jobId: string) =>
   request(`/jobs/${jobId}/toggle`, { method: "POST" });
@@ -458,6 +484,47 @@ export const syncJob = (jobId: string) =>
   request(`/jobs/${jobId}/sync`, { method: "POST" });
 export const deleteJob = (jobId: string) =>
   request(`/jobs/${jobId}`, { method: "DELETE" });
+
+// Partial replay
+export type ReplayMode = 'REMAINING_TODAY' | 'FAILED_ONLY' | 'ALL' | 'SELECTED';
+
+export interface ReplayPreviewDataset {
+  dataset_id: string;
+  dataset_name: string;
+  source_type: string;
+  replay_status: 'SUCCEEDED' | 'FAILED' | 'PENDING' | 'NOT_ENQUEUED';
+  succeeded_today: boolean;
+  error_class: string | null;
+  error_message: string | null;
+}
+
+export interface ReplayPreviewResponse {
+  ok: boolean;
+  execution: {
+    execution_id: string;
+    status: string;
+    started_at: string;
+    finished_at: string;
+    datasets_total: number;
+  };
+  datasets: ReplayPreviewDataset[];
+  summary: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    pending: number;
+    not_enqueued: number;
+  };
+}
+
+export const getReplayPreview = (jobId: string, executionId: string) =>
+  request<ReplayPreviewResponse>(`/jobs/${jobId}/replay-preview/${executionId}`);
+
+export const executePartialReplay = (jobId: string, body: {
+  execution_id: string;
+  mode: ReplayMode;
+  dataset_ids?: string[];
+}) => request(`/jobs/${jobId}/replay`, { method: "POST", body: JSON.stringify(body) });
 
 // Ops Control Plane
 export const getOpsRealtimeBoard = (params: {

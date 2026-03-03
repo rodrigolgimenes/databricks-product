@@ -7,14 +7,16 @@ import { FilterBar, FilterDefinition } from '@/components/ui/filter-bar';
 import { StatusBadge } from '@/components/ui/status-badge';
 import {
   Activity, Play, Calendar, ExternalLink, AlertTriangle,
-  CheckCircle2, XCircle, Info, Database, Repeat, Clock,
+  CheckCircle2, XCircle, Info, Database, Repeat, Clock, RotateCcw,
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { formatDateTime, formatDuration } from './helpers';
 import { InfoTooltip } from './InfoTooltip';
 import { getErrorSuggestion, classifyFailureSpeed } from '@/lib/error-suggestions';
 
 interface JobHistoryTabProps {
   runs: any[];
+  onReplay?: (executionId: string) => void;
 }
 
 /* ── Error class recurrence map ─────────────────── */
@@ -131,7 +133,7 @@ function ExpandedRunDetails({ run }: { run: any }) {
 
 /* ── Main Component ─────────────────────────────── */
 
-export function JobHistoryTab({ runs }: JobHistoryTabProps) {
+export function JobHistoryTab({ runs, onReplay }: JobHistoryTabProps) {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -165,6 +167,7 @@ export function JobHistoryTab({ runs }: JobHistoryTabProps) {
         { value: 'RUNNING', label: 'Executando' },
         { value: 'PENDING', label: 'Pendente' },
         { value: 'CANCELLED', label: 'Cancelado' },
+        { value: 'PARTIAL', label: 'Parcial' },
       ],
     },
     {
@@ -302,20 +305,35 @@ export function JobHistoryTab({ runs }: JobHistoryTabProps) {
       key: 'actions',
       header: '',
       className: 'text-right',
-      render: (row) => (
-        <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
-          {row.run_page_url && (
-            <a
-              href={row.run_page_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
-            >
-              <ExternalLink className="h-3 w-3" /> Databricks
-            </a>
-          )}
-        </div>
-      ),
+      render: (row) => {
+        const canReplay = onReplay && row.execution_id &&
+          ['FAILED', 'PARTIAL', 'CANCELLED', 'SUCCEEDED'].includes(row.status) &&
+          !['RUNNING', 'PENDING'].includes(row.status);
+        return (
+          <div className="flex items-center gap-1.5 justify-end" onClick={(e) => e.stopPropagation()}>
+            {canReplay && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs gap-1"
+                onClick={() => onReplay(row.execution_id)}
+              >
+                <RotateCcw className="h-3 w-3" /> Retomar
+              </Button>
+            )}
+            {row.run_page_url && (
+              <a
+                href={row.run_page_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+              >
+                <ExternalLink className="h-3 w-3" /> Databricks
+              </a>
+            )}
+          </div>
+        );
+      },
     },
   ];
 

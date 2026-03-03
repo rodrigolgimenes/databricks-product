@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ExternalLink, Briefcase, AlertTriangle,
-  CheckCircle2, XCircle, Info, Database,
+  CheckCircle2, XCircle, Info, Database, Loader2,
 } from "lucide-react";
 import * as api from "@/lib/api";
 import { getErrorSuggestion } from "@/lib/error-suggestions";
@@ -74,6 +74,8 @@ export function JobExecutionsTab({ pollingInterval, isActive }: JobExecutionsTab
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const [sortKey, setSortKey] = useState("started_at");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const fetchData = useCallback(async () => {
     try {
@@ -157,8 +159,28 @@ export function JobExecutionsTab({ pollingInterval, isActive }: JobExecutionsTab
           (r.error_class || "").toLowerCase().includes(q)
       );
     }
+    // Client-side sorting
+    filtered.sort((a: any, b: any) => {
+      let va: any, vb: any;
+      if (sortKey === "started_at") {
+        va = a.started_at ? new Date(a.started_at).getTime() : 0;
+        vb = b.started_at ? new Date(b.started_at).getTime() : 0;
+      } else if (sortKey === "duration") {
+        va = Number(a.duration_ms || 0);
+        vb = Number(b.duration_ms || 0);
+      } else if (sortKey === "datasets") {
+        va = Number(a.datasets_processed || 0) + Number(a.datasets_failed || 0);
+        vb = Number(b.datasets_processed || 0) + Number(b.datasets_failed || 0);
+      } else {
+        va = String(a[sortKey] || "").toLowerCase();
+        vb = String(b[sortKey] || "").toLowerCase();
+      }
+      if (va < vb) return sortDir === "asc" ? -1 : 1;
+      if (va > vb) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
     setFilteredRuns(filtered);
-  }, [allRuns, filters, search]);
+  }, [allRuns, filters, search, sortKey, sortDir]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -194,16 +216,24 @@ export function JobExecutionsTab({ pollingInterval, isActive }: JobExecutionsTab
         { value: "PENDING", label: "Pending" },
         { value: "TIMEOUT", label: "Timeout" },
         { value: "CANCELLED", label: "Cancelled" },
+        { value: "PARTIAL", label: "Parcial" },
       ],
     },
   ];
 
   const paginatedRuns = filteredRuns.slice((page - 1) * pageSize, page * pageSize);
 
+  const handleSort = (key: string, dir: "asc" | "desc") => {
+    setSortKey(key);
+    setSortDir(dir);
+    setPage(1);
+  };
+
   const columns: DataTableColumn[] = [
     {
       key: "job_name",
       header: "Job",
+      sortable: true,
       render: (row) => (
         <div className="min-w-0">
           <p className="font-medium text-sm truncate">{row.job_name}</p>
@@ -225,6 +255,7 @@ export function JobExecutionsTab({ pollingInterval, isActive }: JobExecutionsTab
     {
       key: "status",
       header: "Status",
+      sortable: true,
       render: (row) => {
         const normalized = row.status === "SUCCESS" ? "SUCCEEDED" : row.status;
         return <StatusBadge status={normalized} />;
@@ -233,17 +264,15 @@ export function JobExecutionsTab({ pollingInterval, isActive }: JobExecutionsTab
     {
       key: "started_at",
       header: "Início",
+      sortable: true,
       render: (row) => (
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="text-xs whitespace-nowrap cursor-help">
-              {row.started_at
-                ? new Date(row.started_at).toLocaleDateString("pt-BR")
-                : "—"}
+              {formatTs(row.started_at)}
             </span>
           </TooltipTrigger>
           <TooltipContent>
-            <p className="text-xs">{formatTs(row.started_at)}</p>
             {row.finished_at && (
               <p className="text-xs">Fim: {formatTs(row.finished_at)}</p>
             )}
@@ -254,6 +283,7 @@ export function JobExecutionsTab({ pollingInterval, isActive }: JobExecutionsTab
     {
       key: "duration",
       header: "Duração",
+      sortable: true,
       className: "text-right",
       render: (row) => {
         const isRunning = ["RUNNING", "PENDING"].includes(row.status);
@@ -273,26 +303,47 @@ export function JobExecutionsTab({ pollingInterval, isActive }: JobExecutionsTab
     {
       key: "datasets",
       header: "Datasets",
+      sortable: true,
       render: (row) => {
-        const total = row.datasets_total;
-        const ok = row.datasets_processed;
-        const fail = row.datasets_failed;
-        if (total == null && ok == null && fail == null)
+        const total = Number(row.datasets_total || 0);
+        const ok = Number(row.datasets_processed || 0);
+        const fail = Number(row.datasets_failed || 0);
+        if (!total && !ok && !fail)
           return <span className="text-xs text-muted-foreground">—</span>;
+        const processed = ok + fail;
+        const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+        const isRunning = ["RUNNING", "PENDING"].includes(row.status);
         return (
-          <div className="flex items-center gap-1.5 text-xs">
-            {ok != null && ok > 0 && (
-              <span className="flex items-center gap-0.5 text-green-700">
-                <CheckCircle2 className="h-3 w-3" /> {ok}
-              </span>
-            )}
-            {fail != null && fail > 0 && (
-              <span className="flex items-center gap-0.5 text-red-700">
-                <XCircle className="h-3 w-3" /> {fail}
-              </span>
-            )}
-            {total != null && (
-              <span className="text-muted-foreground">/ {total}</span>
+          <div className="space-y-1">
+            <div className="flex items-center gap-1.5 text-xs">
+              {ok > 0 && (
+                <span className="flex items-center gap-0.5 text-green-700">
+                  <CheckCircle2 className="h-3 w-3" /> {ok}
+                </span>
+              )}
+              {fail > 0 && (
+                <span className="flex items-center gap-0.5 text-red-700">
+                  <XCircle className="h-3 w-3" /> {fail}
+                </span>
+              )}
+              {total > 0 && (
+                <span className="text-muted-foreground">/ {total}</span>
+              )}
+              {isRunning && total > 0 && (
+                <span className="flex items-center gap-0.5 text-blue-600 font-medium">
+                  <Loader2 className="h-3 w-3 animate-spin" /> {pct}%
+                </span>
+              )}
+            </div>
+            {total > 0 && (
+              <div className="w-full bg-gray-200 rounded-full h-1.5">
+                <div
+                  className={`h-1.5 rounded-full transition-all ${
+                    fail > 0 ? "bg-red-500" : isRunning ? "bg-blue-500" : "bg-green-500"
+                  }`}
+                  style={{ width: `${Math.min(pct, 100)}%` }}
+                />
+              </div>
             )}
           </div>
         );
@@ -301,6 +352,7 @@ export function JobExecutionsTab({ pollingInterval, isActive }: JobExecutionsTab
     {
       key: "error",
       header: "Erro",
+      sortable: true,
       render: (row) => {
         if (!row.error_message && !row.error_class)
           return <span className="text-xs text-muted-foreground">—</span>;
@@ -532,6 +584,9 @@ export function JobExecutionsTab({ pollingInterval, isActive }: JobExecutionsTab
         pageSize={pageSize}
         onPageChange={setPage}
         onPageSizeChange={setPageSize}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onSort={handleSort}
         loading={loading}
         emptyMessage="Nenhuma execução de job encontrada."
         rowKey={(row) =>

@@ -32,6 +32,7 @@ export function MonitorKPIs({ stats, metrics24h, loading }: MonitorKPIsProps) {
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
       <StatCard
         title="Executando Agora"
+        description="Datasets em processamento (RUNNING + CLAIMED) na fila"
         value={running}
         icon={<Activity className="h-5 w-5 text-blue-600" />}
         loading={loading}
@@ -39,12 +40,14 @@ export function MonitorKPIs({ stats, metrics24h, loading }: MonitorKPIsProps) {
       />
       <StatCard
         title="Sucesso (24h)"
+        description="Datasets processados com sucesso nas últimas 24 horas"
         value={m.success}
         icon={<CheckCircle className="h-5 w-5 text-green-600" />}
         loading={loading}
       />
       <StatCard
         title="Falha (24h)"
+        description="Datasets que falharam nas últimas 24 horas"
         value={m.failed}
         icon={<AlertCircle className="h-5 w-5 text-red-600" />}
         loading={loading}
@@ -52,18 +55,21 @@ export function MonitorKPIs({ stats, metrics24h, loading }: MonitorKPIsProps) {
       />
       <StatCard
         title="Na Fila"
+        description="Datasets aguardando processamento (PENDING)"
         value={pending}
         icon={<Clock className="h-5 w-5 text-yellow-600" />}
         loading={loading}
       />
       <StatCard
         title="Tempo Médio"
+        description="Duração média de processamento nas últimas 24h"
         value={formatDuration(m.avg_duration_sec)}
         icon={<Timer className="h-5 w-5 text-purple-600" />}
         loading={loading}
       />
       <StatCard
         title="Taxa de Sucesso"
+        description="Porcentagem de sucesso nas últimas 24 horas"
         value={`${m.success_rate}%`}
         icon={<TrendingUp className="h-5 w-5 text-emerald-600" />}
         trendType={m.success_rate >= 95 ? "positive" : m.success_rate >= 80 ? "neutral" : "negative"}

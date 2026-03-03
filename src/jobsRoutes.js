@@ -192,7 +192,7 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         // Only update if Databricks run is finished
         if (lifeCycle !== 'TERMINATED' && lifeCycle !== 'INTERNAL_ERROR' && lifeCycle !== 'SKIPPED') continue;
 
-        const newStatus = resultState === 'SUCCESS' ? 'SUCCEEDED' : 
+        let newStatus = resultState === 'SUCCESS' ? 'SUCCEEDED' : 
                           resultState === 'FAILED' ? 'FAILED' :
                           resultState === 'CANCELED' ? 'CANCELLED' :
                           resultState === 'TIMEDOUT' ? 'FAILED' : 'COMPLETED';
@@ -203,26 +203,46 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         const finishedAt = new Date(endMs).toISOString().replace('T', ' ').replace('Z', '');
 
         // Count datasets processed from run_queue
+        // Use the portal execution's started_at (matches requested_at of enqueued datasets)
+        // instead of Databricks start_time which is slightly later
         let datasetsProcessed = 0;
         let datasetsFailed = 0;
+        let datasetsPending = 0;
         try {
+          const execStartedAt = exec.started_at
+            ? String(exec.started_at).replace('T', ' ').replace('Z', '').substring(0, 19)
+            : new Date(startMs).toISOString().replace('T', ' ').replace('Z', '').substring(0, 19);
           const queueStats = await sqlQueryObjects(
             `SELECT status, COUNT(*) as cnt FROM ${portalCfg.opsSchema}.run_queue ` +
             `WHERE correlation_id = ${sqlStringLiteral(exec.job_id)} ` +
-            `AND requested_at >= TIMESTAMP ${sqlStringLiteral(new Date(startMs).toISOString().replace('T', ' ').replace('Z', ''))} ` +
+            `AND requested_at BETWEEN (TIMESTAMP ${sqlStringLiteral(execStartedAt)} - INTERVAL 30 SECONDS) ` +
+            `AND (TIMESTAMP ${sqlStringLiteral(execStartedAt)} + INTERVAL 30 SECONDS) ` +
             `GROUP BY status`
           );
           for (const row of queueStats) {
             const st = String(row.status || '').toUpperCase();
             if (st === 'SUCCEEDED') datasetsProcessed += Number(row.cnt);
             if (st === 'FAILED') datasetsFailed += Number(row.cnt);
+            if (st === 'PENDING') datasetsPending += Number(row.cnt);
           }
         } catch (qErr) {
           console.warn('[JOBS] Error counting queue stats:', qErr.message);
         }
 
+        // Detect incomplete execution: Databricks finished but datasets still PENDING
+        const datasetsTotal = Number(exec.datasets_total || 0);
+        if (newStatus === 'SUCCEEDED' && datasetsTotal > 0 && datasetsPending > 0) {
+          const processed = datasetsProcessed + datasetsFailed;
+          console.warn(`[JOBS] ⚠️ Incomplete execution detected for ${exec.execution_id}: ` +
+            `${processed}/${datasetsTotal} processed, ${datasetsPending} still PENDING`);
+          newStatus = 'PARTIAL';
+        }
+
         // Update execution history
         const errorMsg = runDetails.state?.state_message || null;
+        const partialMsg = newStatus === 'PARTIAL'
+          ? `Execução incompleta: ${datasetsProcessed + datasetsFailed}/${datasetsTotal} datasets processados, ${datasetsPending} ficaram na fila`
+          : null;
         await db.query(
           `UPDATE ${portalCfg.ctrlSchema}.job_execution_history ` +
           `SET status = ${sqlStringLiteral(newStatus)}, ` +
@@ -231,6 +251,7 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
           `    datasets_processed = ${datasetsProcessed}, ` +
           `    datasets_failed = ${datasetsFailed}` +
           (errorMsg ? `, error_message = ${sqlStringLiteral(errorMsg.substring(0, 1000))}` : '') +
+          (partialMsg ? `, error_message = ${sqlStringLiteral(partialMsg)}` : '') +
           ` WHERE execution_id = ${sqlStringLiteral(exec.execution_id)}`
         );
 
@@ -252,6 +273,135 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         console.log(`[JOBS] Synced execution ${exec.execution_id}: ${exec.status} -> ${newStatus} (${durationMs}ms)`);
       } catch (err) {
         console.warn(`[JOBS] Error syncing execution ${exec.execution_id}:`, err.message);
+      }
+    }
+    return updated;
+  }
+
+  // ==================== HELPER: Enrich dataset counts for completed executions ====================
+  async function enrichDatasetCounts(executions) {
+    // Enrich any completed execution missing dataset counts
+    const needsEnrich = executions.filter(e => {
+      const processed = Number(e.datasets_processed || 0);
+      const failed = Number(e.datasets_failed || 0);
+      return (processed + failed) === 0 &&
+        !['RUNNING', 'PENDING'].includes(e.status) &&
+        e.started_at && e.finished_at;
+    });
+    if (needsEnrich.length === 0) return executions;
+
+    const updated = [...executions];
+    for (const exec of needsEnrich) {
+      try {
+        const startedAt = String(exec.started_at).replace('T', ' ').replace('Z', '').substring(0, 19);
+        const finishedAt = String(exec.finished_at).replace('T', ' ').replace('Z', '').substring(0, 19);
+
+        // Count datasets that FINISHED during this execution's time window
+        const queueStats = await sqlQueryObjects(
+          `SELECT status, COUNT(*) as cnt FROM ${portalCfg.opsSchema}.run_queue ` +
+          `WHERE correlation_id = ${sqlStringLiteral(exec.job_id)} ` +
+          `AND finished_at BETWEEN TIMESTAMP ${sqlStringLiteral(startedAt)} ` +
+          `AND (TIMESTAMP ${sqlStringLiteral(finishedAt)} + INTERVAL 1 MINUTE) ` +
+          `GROUP BY status`
+        );
+
+        let processed = 0, failed = 0;
+        for (const row of queueStats) {
+          const st = String(row.status || '').toUpperCase();
+          if (st === 'SUCCEEDED') processed += Number(row.cnt);
+          if (st === 'FAILED') failed += Number(row.cnt);
+        }
+
+        // If datasets_total is missing, count enqueued items for this batch
+        let total = Number(exec.datasets_total || 0);
+        if (total === 0) {
+          const totalResult = await sqlQueryObjects(
+            `SELECT COUNT(*) as cnt FROM ${portalCfg.opsSchema}.run_queue ` +
+            `WHERE correlation_id = ${sqlStringLiteral(exec.job_id)} ` +
+            `AND requested_at BETWEEN (TIMESTAMP ${sqlStringLiteral(startedAt)} - INTERVAL 30 SECONDS) ` +
+            `AND (TIMESTAMP ${sqlStringLiteral(startedAt)} + INTERVAL 30 SECONDS)`
+          );
+          total = Number(totalResult[0]?.cnt || 0);
+        }
+        // Fallback: if no enqueue batch found, total = what was actually processed
+        if (total === 0 && (processed + failed) > 0) {
+          total = processed + failed;
+        }
+
+        if (processed > 0 || failed > 0 || total > 0) {
+          const setClauses = [
+            `datasets_processed = ${processed}`,
+            `datasets_failed = ${failed}`,
+          ];
+          if (total > 0 && !exec.datasets_total) {
+            setClauses.push(`datasets_total = ${total}`);
+          }
+          await db.query(
+            `UPDATE ${portalCfg.ctrlSchema}.job_execution_history ` +
+            `SET ${setClauses.join(', ')} ` +
+            `WHERE execution_id = ${sqlStringLiteral(exec.execution_id)}`
+          );
+
+          const idx = updated.findIndex(e => e.execution_id === exec.execution_id);
+          if (idx >= 0) {
+            updated[idx] = {
+              ...updated[idx],
+              datasets_processed: processed,
+              datasets_failed: failed,
+              datasets_total: total || updated[idx].datasets_total,
+            };
+          }
+          console.log(`[JOBS] Enriched dataset counts for ${exec.execution_id}: ${processed} ok, ${failed} failed, total ${total}`);
+        }
+      } catch (err) {
+        console.warn(`[JOBS] Error enriching dataset counts for ${exec.execution_id}:`, err.message);
+      }
+    }
+    return updated;
+  }
+
+  // ==================== HELPER: Enrich RUNNING executions with real-time dataset counts ====================
+  async function enrichRunningDatasetCounts(executions) {
+    const running = executions.filter(e => ['RUNNING', 'PENDING'].includes(e.status));
+    if (running.length === 0) return executions;
+
+    const updated = [...executions];
+    for (const exec of running) {
+      try {
+        const startedAt = String(exec.started_at || '').replace('T', ' ').replace('Z', '').substring(0, 19);
+        if (!startedAt) continue;
+
+        // Count current status of datasets in run_queue for this execution
+        const queueStats = await sqlQueryObjects(
+          `SELECT status, COUNT(*) as cnt FROM ${portalCfg.opsSchema}.run_queue ` +
+          `WHERE correlation_id = ${sqlStringLiteral(exec.job_id)} ` +
+          `AND requested_at BETWEEN (TIMESTAMP ${sqlStringLiteral(startedAt)} - INTERVAL 30 SECONDS) ` +
+          `AND (TIMESTAMP ${sqlStringLiteral(startedAt)} + INTERVAL 30 SECONDS) ` +
+          `GROUP BY status`
+        );
+
+        let processed = 0, failed = 0, pending = 0, running_ds = 0;
+        for (const row of queueStats) {
+          const st = String(row.status || '').toUpperCase();
+          if (st === 'SUCCEEDED') processed += Number(row.cnt);
+          if (st === 'FAILED') failed += Number(row.cnt);
+          if (st === 'PENDING') pending += Number(row.cnt);
+          if (st === 'RUNNING' || st === 'CLAIMED') running_ds += Number(row.cnt);
+        }
+
+        const total = Number(exec.datasets_total || 0) || (processed + failed + pending + running_ds);
+
+        const idx = updated.findIndex(e => e.execution_id === exec.execution_id);
+        if (idx >= 0) {
+          updated[idx] = {
+            ...updated[idx],
+            datasets_processed: processed,
+            datasets_failed: failed,
+            datasets_total: total,
+          };
+        }
+      } catch (err) {
+        console.warn(`[JOBS] Error enriching running dataset counts for ${exec.execution_id}:`, err.message);
       }
     }
     return updated;
@@ -457,13 +607,24 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
          LIMIT ${parseInt(page_size)} OFFSET ${offset}`
       );
 
-      // Get dataset counts for each job
+      // Get dataset counts and latest execution status for each job
       for (const job of jobs) {
         const datasetCount = await sqlQueryObjects(
           `SELECT COUNT(*) as count FROM ${portalCfg.ctrlSchema}.job_datasets 
            WHERE job_id = ${sqlStringLiteral(job.job_id)} AND enabled = true`
         );
         job.dataset_count = datasetCount[0]?.count || 0;
+
+        // Latest execution status from history
+        const latestExec = await sqlQueryObjects(
+          `SELECT status, started_at, finished_at
+           FROM ${portalCfg.ctrlSchema}.job_execution_history
+           WHERE job_id = ${sqlStringLiteral(job.job_id)}
+           ORDER BY started_at DESC LIMIT 1`
+        );
+        if (latestExec.length > 0) {
+          job.latest_execution_status = latestExec[0].status;
+        }
       }
 
       return res.json({
@@ -605,6 +766,9 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
       // Auto-sync: check Databricks for any RUNNING executions that may have finished
       executions = await syncRunningExecutions(executions);
 
+      // Enrich RUNNING executions with real-time dataset progress from run_queue
+      executions = await enrichRunningDatasetCounts(executions);
+
       // Re-fetch job after sync (last_run_* fields may have been updated)
       const jobsAfterSync = await sqlQueryObjects(
         `SELECT * FROM ${portalCfg.ctrlSchema}.scheduled_jobs 
@@ -675,7 +839,8 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         timezone,
         max_concurrent_runs,
         timeout_seconds,
-        notification_email
+        notification_email,
+        dataset_ids
       } = req.body;
 
       // Validate cron if updating
@@ -703,7 +868,7 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
       if (max_concurrent_runs !== undefined) updates.push(`max_concurrent_runs = ${max_concurrent_runs}`);
       if (timeout_seconds !== undefined) updates.push(`timeout_seconds = ${timeout_seconds}`);
 
-      if (updates.length === 0) {
+      if (updates.length === 0 && !Array.isArray(dataset_ids)) {
         return res.status(400).json({
           ok: false,
           error: 'NO_UPDATES',
@@ -712,15 +877,18 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
       }
 
       const now = new Date().toISOString().replace('T', ' ').replace('Z', '');
-      updates.push(`updated_at = TIMESTAMP ${sqlStringLiteral(now)}`);
-      updates.push(`updated_by = ${sqlStringLiteral(user)}`);
 
-      // Update database
-      await db.query(
-        `UPDATE ${portalCfg.ctrlSchema}.scheduled_jobs 
-         SET ${updates.join(', ')}
-         WHERE job_id = ${sqlStringLiteral(job_id)}`
-      );
+      if (updates.length > 0) {
+        updates.push(`updated_at = TIMESTAMP ${sqlStringLiteral(now)}`);
+        updates.push(`updated_by = ${sqlStringLiteral(user)}`);
+
+        // Update database
+        await db.query(
+          `UPDATE ${portalCfg.ctrlSchema}.scheduled_jobs 
+           SET ${updates.join(', ')}
+           WHERE job_id = ${sqlStringLiteral(job_id)}`
+        );
+      }
 
       // Update Databricks job if it exists
       if (job.databricks_job_id) {
@@ -737,6 +905,61 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         } catch (dbError) {
           console.warn('[JOBS] Warning: Failed to update Databricks job:', dbError.message);
         }
+      }
+
+      // ── Sync dataset associations if dataset_ids provided ──
+      if (Array.isArray(dataset_ids)) {
+        // Get current datasets
+        const currentDatasets = await sqlQueryObjects(
+          `SELECT dataset_id FROM ${portalCfg.ctrlSchema}.job_datasets 
+           WHERE job_id = ${sqlStringLiteral(job_id)}`
+        );
+        const currentIds = new Set(currentDatasets.map(d => d.dataset_id));
+        const newIds = new Set(dataset_ids);
+
+        // Remove datasets that were deselected
+        for (const curr of currentIds) {
+          if (!newIds.has(curr)) {
+            await db.query(
+              `DELETE FROM ${portalCfg.ctrlSchema}.job_datasets 
+               WHERE job_id = ${sqlStringLiteral(job_id)} 
+               AND dataset_id = ${sqlStringLiteral(curr)}`
+            );
+            console.log(`[JOBS] Removed dataset ${curr} from job ${job_id}`);
+          }
+        }
+
+        // Add newly selected datasets
+        const maxOrderResult = await sqlQueryObjects(
+          `SELECT COALESCE(MAX(execution_order), -1) as max_order 
+           FROM ${portalCfg.ctrlSchema}.job_datasets 
+           WHERE job_id = ${sqlStringLiteral(job_id)}`
+        );
+        let nextOrder = (Number(maxOrderResult[0]?.max_order) || 0) + 1;
+        const now2 = new Date().toISOString().replace('T', ' ').replace('Z', '');
+
+        for (const dsId of dataset_ids) {
+          if (!currentIds.has(dsId)) {
+            const jobDatasetId = uuidv4();
+            await db.query(
+              `INSERT INTO ${portalCfg.ctrlSchema}.job_datasets (
+                job_dataset_id, job_id, dataset_id, execution_order, enabled, created_at, created_by
+              ) VALUES (
+                ${sqlStringLiteral(jobDatasetId)},
+                ${sqlStringLiteral(job_id)},
+                ${sqlStringLiteral(dsId)},
+                ${nextOrder},
+                true,
+                TIMESTAMP ${sqlStringLiteral(now2)},
+                ${sqlStringLiteral(user)}
+              )`
+            );
+            nextOrder++;
+            console.log(`[JOBS] Added dataset ${dsId} to job ${job_id}`);
+          }
+        }
+
+        console.log(`[JOBS] Dataset sync complete for job ${job_id}: ${dataset_ids.length} total, removed ${[...currentIds].filter(id => !newIds.has(id)).length}, added ${dataset_ids.filter(id => !currentIds.has(id)).length}`);
       }
 
       return res.json({
@@ -876,6 +1099,26 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         }
       }
 
+      // Ensure Databricks job has sufficient timeout (min 3h = 10800s)
+      const portalTimeout = Number(job.timeout_seconds) || 10800;
+      const effectiveTimeout = Math.max(portalTimeout, 10800); // at least 3h
+      try {
+        await jobsApi.updateJob(job.databricks_job_id, {
+          timeout_seconds: effectiveTimeout
+        });
+        // Also update portal DB if it was below minimum
+        if (portalTimeout < 10800) {
+          await db.query(
+            `UPDATE ${portalCfg.ctrlSchema}.scheduled_jobs ` +
+            `SET timeout_seconds = ${effectiveTimeout} ` +
+            `WHERE job_id = ${sqlStringLiteral(job_id)}`
+          );
+          console.log(`[JOBS] Updated timeout for job ${job_id}: ${portalTimeout}s -> ${effectiveTimeout}s`);
+        }
+      } catch (timeoutErr) {
+        console.warn(`[JOBS] Warning: Failed to sync timeout for job ${job_id}:`, timeoutErr.message);
+      }
+
       // Enqueue datasets first
       const datasets = await sqlQueryObjects(
         `SELECT dataset_id FROM ${portalCfg.ctrlSchema}.job_datasets 
@@ -905,8 +1148,8 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         );
       }
 
-      // Trigger Databricks job
-      const runResult = await jobsApi.runJobNow(job.databricks_job_id, { job_id });
+      // Trigger Databricks job (pass max_items so notebook processes ALL enqueued datasets)
+      const runResult = await jobsApi.runJobNow(job.databricks_job_id, { job_id, max_items: String(datasets.length) });
 
       // Record execution in history
       await db.query(
@@ -990,6 +1233,12 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
       // Auto-sync: check Databricks for any RUNNING executions that may have finished
       executions = await syncRunningExecutions(executions);
 
+      // Enrich dataset counts for completed executions missing them
+      executions = await enrichDatasetCounts(executions);
+
+      // Enrich RUNNING executions with real-time dataset progress from run_queue
+      executions = await enrichRunningDatasetCounts(executions);
+
       return res.json({
         ok: true,
         runs: executions,
@@ -1032,7 +1281,7 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
          FROM ${portalCfg.ctrlSchema}.job_datasets 
          WHERE job_id = ${sqlStringLiteral(job_id)}`
       );
-      let nextOrder = (maxOrder[0]?.max_order || -1) + 1;
+      let nextOrder = (Number(maxOrder[0]?.max_order) || 0) + 1;
 
       const now = new Date().toISOString().replace('T', ' ').replace('Z', '');
 
@@ -1341,6 +1590,279 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         error: 'INTERNAL_ERROR',
         message: error.message
       });
+    }
+  });
+
+  // ==================== REPLAY PREVIEW ====================
+  // Shows which datasets are eligible for partial replay from a specific execution
+  app.get('/api/portal/jobs/:job_id/replay-preview/:execution_id', async (req, res) => {
+    const { job_id, execution_id } = req.params;
+    console.log('[JOBS] GET /jobs/:job_id/replay-preview/:execution_id - Preview replay for execution:', execution_id);
+
+    try {
+      // 1. Get the execution
+      const execRows = await sqlQueryObjects(
+        `SELECT * FROM ${portalCfg.ctrlSchema}.job_execution_history ` +
+        `WHERE execution_id = ${sqlStringLiteral(execution_id)} ` +
+        `AND job_id = ${sqlStringLiteral(job_id)} LIMIT 1`
+      );
+      if (execRows.length === 0) {
+        return res.status(404).json({ ok: false, error: 'EXECUTION_NOT_FOUND', message: 'Execução não encontrada' });
+      }
+      const exec = execRows[0];
+
+      // 2. Get all datasets associated with this job
+      const jobDatasets = await sqlQueryObjects(
+        `SELECT jd.dataset_id, dc.dataset_name, dc.bronze_table, dc.silver_table, dc.source_type ` +
+        `FROM ${portalCfg.ctrlSchema}.job_datasets jd ` +
+        `JOIN ${portalCfg.ctrlSchema}.dataset_control dc ON jd.dataset_id = dc.dataset_id ` +
+        `WHERE jd.job_id = ${sqlStringLiteral(job_id)} AND jd.enabled = true ` +
+        `ORDER BY jd.execution_order ASC`
+      );
+
+      // 3. Get run_queue status for datasets from this execution window
+      const startedAt = String(exec.started_at || '').replace('T', ' ').replace('Z', '').substring(0, 19);
+      let queueItems = [];
+      if (startedAt) {
+        queueItems = await sqlQueryObjects(
+          `SELECT dataset_id, status, started_at, finished_at, last_error_class, last_error_message ` +
+          `FROM ${portalCfg.opsSchema}.run_queue ` +
+          `WHERE correlation_id = ${sqlStringLiteral(job_id)} ` +
+          `AND requested_at BETWEEN (TIMESTAMP ${sqlStringLiteral(startedAt)} - INTERVAL 30 SECONDS) ` +
+          `AND (TIMESTAMP ${sqlStringLiteral(startedAt)} + INTERVAL 30 SECONDS)`
+        );
+      }
+
+      // 4. Also check if any dataset already SUCCEEDED today (from any execution)
+      const todayStart = new Date().toISOString().substring(0, 10) + ' 00:00:00';
+      const todaySucceeded = await sqlQueryObjects(
+        `SELECT DISTINCT dataset_id FROM ${portalCfg.opsSchema}.run_queue ` +
+        `WHERE correlation_id = ${sqlStringLiteral(job_id)} ` +
+        `AND status = 'SUCCEEDED' ` +
+        `AND finished_at >= TIMESTAMP ${sqlStringLiteral(todayStart)}`
+      );
+      const succeededTodaySet = new Set(todaySucceeded.map(r => r.dataset_id));
+
+      // Build queue status map (from this specific execution)
+      const queueMap = new Map();
+      for (const qi of queueItems) {
+        queueMap.set(qi.dataset_id, qi);
+      }
+
+      // 5. Classify each dataset
+      const datasets = jobDatasets.map(ds => {
+        const qi = queueMap.get(ds.dataset_id);
+        const succeededToday = succeededTodaySet.has(ds.dataset_id);
+        const queueStatus = qi ? String(qi.status || '').toUpperCase() : null;
+
+        let replay_status; // SUCCEEDED, FAILED, PENDING, NOT_ENQUEUED
+        if (queueStatus === 'SUCCEEDED') replay_status = 'SUCCEEDED';
+        else if (queueStatus === 'FAILED') replay_status = 'FAILED';
+        else if (queueStatus === 'PENDING' || queueStatus === 'CLAIMED' || queueStatus === 'RUNNING') replay_status = 'PENDING';
+        else if (succeededToday) replay_status = 'SUCCEEDED';
+        else replay_status = 'NOT_ENQUEUED';
+
+        return {
+          dataset_id: ds.dataset_id,
+          dataset_name: ds.dataset_name,
+          source_type: ds.source_type,
+          replay_status,
+          succeeded_today: succeededToday,
+          error_class: qi?.last_error_class || null,
+          error_message: qi?.last_error_message || null,
+        };
+      });
+
+      const summary = {
+        total: datasets.length,
+        succeeded: datasets.filter(d => d.replay_status === 'SUCCEEDED').length,
+        failed: datasets.filter(d => d.replay_status === 'FAILED').length,
+        pending: datasets.filter(d => d.replay_status === 'PENDING').length,
+        not_enqueued: datasets.filter(d => d.replay_status === 'NOT_ENQUEUED').length,
+      };
+
+      return res.json({
+        ok: true,
+        execution: {
+          execution_id: exec.execution_id,
+          status: exec.status,
+          started_at: exec.started_at,
+          finished_at: exec.finished_at,
+          datasets_total: exec.datasets_total,
+        },
+        datasets,
+        summary,
+      });
+
+    } catch (error) {
+      console.error('[JOBS] Error building replay preview:', error);
+      return res.status(500).json({ ok: false, error: 'INTERNAL_ERROR', message: error.message });
+    }
+  });
+
+  // ==================== PARTIAL REPLAY ====================
+  // Re-enqueue only selected/remaining datasets and trigger Databricks
+  app.post('/api/portal/jobs/:job_id/replay', async (req, res) => {
+    const { job_id } = req.params;
+    const user = getRequestUser(req);
+    const {
+      execution_id,      // original execution being replayed
+      mode,              // REMAINING_TODAY | FAILED_ONLY | ALL | SELECTED
+      dataset_ids,       // only for mode=SELECTED
+    } = req.body;
+
+    console.log(`[JOBS] POST /jobs/:job_id/replay - mode=${mode}, execution_id=${execution_id}`);
+
+    try {
+      // 1. Get job
+      const jobs = await sqlQueryObjects(
+        `SELECT * FROM ${portalCfg.ctrlSchema}.scheduled_jobs ` +
+        `WHERE job_id = ${sqlStringLiteral(job_id)} LIMIT 1`
+      );
+      if (jobs.length === 0) {
+        return res.status(404).json({ ok: false, error: 'JOB_NOT_FOUND', message: 'Job não encontrado' });
+      }
+      const job = jobs[0];
+
+      if (!job.databricks_job_id) {
+        return res.status(400).json({ ok: false, error: 'NOT_SYNCED', message: 'Job não sincronizado com Databricks' });
+      }
+
+      // 2. Build the eligible datasets list based on mode
+      // First get all job datasets
+      const allJobDatasets = await sqlQueryObjects(
+        `SELECT jd.dataset_id FROM ${portalCfg.ctrlSchema}.job_datasets jd ` +
+        `WHERE jd.job_id = ${sqlStringLiteral(job_id)} AND jd.enabled = true ` +
+        `ORDER BY jd.execution_order ASC`
+      );
+
+      // Get today's succeeded datasets for this job
+      const todayStart = new Date().toISOString().substring(0, 10) + ' 00:00:00';
+      const todaySucceeded = await sqlQueryObjects(
+        `SELECT DISTINCT dataset_id FROM ${portalCfg.opsSchema}.run_queue ` +
+        `WHERE correlation_id = ${sqlStringLiteral(job_id)} ` +
+        `AND status = 'SUCCEEDED' ` +
+        `AND finished_at >= TIMESTAMP ${sqlStringLiteral(todayStart)}`
+      );
+      const succeededTodaySet = new Set(todaySucceeded.map(r => r.dataset_id));
+
+      // Get today's failed datasets
+      const todayFailed = await sqlQueryObjects(
+        `SELECT DISTINCT dataset_id FROM ${portalCfg.opsSchema}.run_queue ` +
+        `WHERE correlation_id = ${sqlStringLiteral(job_id)} ` +
+        `AND status = 'FAILED' ` +
+        `AND finished_at >= TIMESTAMP ${sqlStringLiteral(todayStart)}`
+      );
+      const failedTodaySet = new Set(todayFailed.map(r => r.dataset_id));
+
+      let datasetsToReplay = [];
+
+      switch (mode) {
+        case 'REMAINING_TODAY':
+          // All datasets NOT yet succeeded today
+          datasetsToReplay = allJobDatasets.filter(d => !succeededTodaySet.has(d.dataset_id));
+          break;
+        case 'FAILED_ONLY':
+          // Only datasets that failed today
+          datasetsToReplay = allJobDatasets.filter(d => failedTodaySet.has(d.dataset_id));
+          break;
+        case 'SELECTED':
+          // User-selected datasets
+          if (!dataset_ids || !Array.isArray(dataset_ids) || dataset_ids.length === 0) {
+            return res.status(400).json({ ok: false, error: 'MISSING_DATASET_IDS', message: 'dataset_ids obrigatório para modo SELECTED' });
+          }
+          const selectedSet = new Set(dataset_ids);
+          datasetsToReplay = allJobDatasets.filter(d => selectedSet.has(d.dataset_id));
+          break;
+        case 'ALL':
+        default:
+          datasetsToReplay = allJobDatasets;
+          break;
+      }
+
+      if (datasetsToReplay.length === 0) {
+        return res.status(400).json({ ok: false, error: 'NO_DATASETS', message: 'Nenhum dataset elegível para replay neste modo' });
+      }
+
+      // 3. Cancel any stale PENDING/CLAIMED items from previous executions for this job
+      try {
+        const cancelResult = await db.query(
+          `UPDATE ${portalCfg.opsSchema}.run_queue ` +
+          `SET status = 'CANCELLED' ` +
+          `WHERE correlation_id = ${sqlStringLiteral(job_id)} ` +
+          `AND status IN ('PENDING', 'CLAIMED') ` +
+          `AND CAST(requested_at AS DATE) = CURRENT_DATE()`
+        );
+        console.log(`[JOBS] Cancelled stale PENDING items for job ${job_id} before replay`);
+      } catch (cancelErr) {
+        console.warn(`[JOBS] Warning: Could not cancel stale items:`, cancelErr.message);
+      }
+
+      // 4. Enqueue datasets
+      const now = new Date().toISOString().replace('T', ' ').replace('Z', '');
+      const newExecutionId = uuidv4();
+
+      for (const ds of datasetsToReplay) {
+        const queueId = uuidv4();
+        await db.query(
+          `INSERT INTO ${portalCfg.opsSchema}.run_queue (` +
+          `  queue_id, dataset_id, trigger_type, status, priority, ` +
+          `  requested_by, requested_at, correlation_id, job_id` +
+          `) VALUES (` +
+          `  ${sqlStringLiteral(queueId)},` +
+          `  ${sqlStringLiteral(ds.dataset_id)},` +
+          `  'MANUAL',` +
+          `  'PENDING',` +
+          `  ${job.priority || 100},` +
+          `  ${sqlStringLiteral(user)},` +
+          `  TIMESTAMP ${sqlStringLiteral(now)},` +
+          `  ${sqlStringLiteral(job_id)},` +
+          `  ${sqlStringLiteral(job_id)}` +
+          `)`
+        );
+      }
+
+      // 4. Trigger Databricks
+      const runResult = await jobsApi.runJobNow(job.databricks_job_id, { job_id, max_items: String(datasetsToReplay.length) });
+
+      // 5. Record execution in history
+      const replayLabel = mode === 'ALL' ? 'Re-execução completa' : 
+                          mode === 'REMAINING_TODAY' ? 'Retomada parcial (pendentes)' :
+                          mode === 'FAILED_ONLY' ? 'Retry (somente falhos)' :
+                          'Replay seletivo';
+      await db.query(
+        `INSERT INTO ${portalCfg.ctrlSchema}.job_execution_history (` +
+        `  execution_id, job_id, databricks_run_id, started_at, status, ` +
+        `  datasets_total, triggered_by, triggered_by_user, run_page_url, error_message` +
+        `) VALUES (` +
+        `  ${sqlStringLiteral(newExecutionId)},` +
+        `  ${sqlStringLiteral(job_id)},` +
+        `  ${runResult.run_id},` +
+        `  TIMESTAMP ${sqlStringLiteral(now)},` +
+        `  'RUNNING',` +
+        `  ${datasetsToReplay.length},` +
+        `  'MANUAL',` +
+        `  ${sqlStringLiteral(user)},` +
+        `  ${sqlStringLiteral(runResult.run_page_url)},` +
+        `  ${sqlStringLiteral(replayLabel + (execution_id ? ` (ref: ${execution_id.substring(0, 8)})` : ''))}` +
+        `)`
+      );
+
+      console.log(`[JOBS] Partial replay started: mode=${mode}, ${datasetsToReplay.length} datasets, execution=${newExecutionId}`);
+
+      return res.json({
+        ok: true,
+        execution_id: newExecutionId,
+        databricks_run_id: runResult.run_id,
+        run_page_url: runResult.run_page_url,
+        datasets_enqueued: datasetsToReplay.length,
+        mode,
+        message: `${replayLabel}: ${datasetsToReplay.length} dataset(s) enfileirado(s).`
+      });
+
+    } catch (error) {
+      console.error('[JOBS] Error executing partial replay:', error);
+      return res.status(500).json({ ok: false, error: 'INTERNAL_ERROR', message: error.message });
     }
   });
 

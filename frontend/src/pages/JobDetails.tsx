@@ -13,6 +13,7 @@ import { JobHistoryTab } from '@/components/jobs/JobHistoryTab';
 import { JobFlowDiagram } from '@/components/jobs/JobFlowDiagram';
 import { RunNowDialog } from '@/components/jobs/RunNowDialog';
 import { DeleteJobDialog } from '@/components/jobs/DeleteJobDialog';
+import { ReplayDialog } from '@/components/jobs/ReplayDialog';
 import {
   calculateOperationalRisk,
   calculateDurationVariance,
@@ -34,6 +35,8 @@ const JobDetails = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [runNowOpen, setRunNowOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [replayOpen, setReplayOpen] = useState(false);
+  const [replayExecutionId, setReplayExecutionId] = useState('');
 
   /* ── Data fetching ─────────────────────────────────── */
 
@@ -252,7 +255,13 @@ const JobDetails = () => {
         </TabsContent>
 
         <TabsContent value="history">
-          <JobHistoryTab runs={runs} />
+          <JobHistoryTab
+            runs={runs}
+            onReplay={(executionId) => {
+              setReplayExecutionId(executionId);
+              setReplayOpen(true);
+            }}
+          />
         </TabsContent>
       </Tabs>
 
@@ -271,6 +280,19 @@ const JobDetails = () => {
         jobName={job.job_name}
         onConfirm={handleDelete}
       />
+      {replayOpen && jobId && (
+        <ReplayDialog
+          open={replayOpen}
+          onOpenChange={setReplayOpen}
+          jobId={jobId}
+          jobName={job.job_name}
+          executionId={replayExecutionId}
+          onSuccess={() => {
+            setActiveTab('overview');
+            setTimeout(handleRefresh, 2000);
+          }}
+        />
+      )}
     </div>
   );
 };

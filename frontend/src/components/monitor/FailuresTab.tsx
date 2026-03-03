@@ -26,6 +26,8 @@ export function FailuresTab({ pollingInterval, isActive }: FailuresTabProps) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState("");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const fetchData = useCallback(async () => {
     try {
@@ -33,6 +35,8 @@ export function FailuresTab({ pollingInterval, isActive }: FailuresTabProps) {
         page,
         page_size: pageSize,
         search: search || undefined,
+        sort_key: sortKey || undefined,
+        sort_dir: sortDir,
       });
       setData(result.items || []);
       setTotal(result.total || 0);
@@ -41,7 +45,7 @@ export function FailuresTab({ pollingInterval, isActive }: FailuresTabProps) {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, search]);
+  }, [page, pageSize, search, sortKey, sortDir]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -71,6 +75,7 @@ export function FailuresTab({ pollingInterval, isActive }: FailuresTabProps) {
     {
       key: "dataset_name",
       header: "Dataset",
+      sortable: true,
       render: (row) => (
         <div className="min-w-0">
           <Tooltip>
@@ -87,6 +92,7 @@ export function FailuresTab({ pollingInterval, isActive }: FailuresTabProps) {
     {
       key: "last_error_class",
       header: "Classe do Erro",
+      sortable: true,
       render: (row) =>
         row.last_error_class ? (
           <Badge variant="destructive" className="text-xs">{row.last_error_class}</Badge>
@@ -113,22 +119,17 @@ export function FailuresTab({ pollingInterval, isActive }: FailuresTabProps) {
     {
       key: "requested_at",
       header: "Data",
+      sortable: true,
       render: (row) => (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="text-xs whitespace-nowrap cursor-help">
-              {row.requested_at ? new Date(row.requested_at).toLocaleDateString("pt-BR") : "—"}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p className="text-xs">{formatTs(row.requested_at)}</p>
-          </TooltipContent>
-        </Tooltip>
+        <span className="text-xs whitespace-nowrap">
+          {formatTs(row.requested_at)}
+        </span>
       ),
     },
     {
       key: "attempt",
       header: "Tentativa",
+      sortable: true,
       className: "text-center",
       render: (row) => (
         <span className="text-xs font-mono">{row.attempt}/{row.max_retries}</span>
@@ -184,6 +185,9 @@ export function FailuresTab({ pollingInterval, isActive }: FailuresTabProps) {
         pageSize={pageSize}
         onPageChange={setPage}
         onPageSizeChange={setPageSize}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onSort={(key, dir) => { setSortKey(key); setSortDir(dir); setPage(1); }}
         loading={loading}
         emptyIcon={<AlertCircle className="h-10 w-10 text-green-500" />}
         emptyMessage="Nenhuma falha encontrada. 🎉"

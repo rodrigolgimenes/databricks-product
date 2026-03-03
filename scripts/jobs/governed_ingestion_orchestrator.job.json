@@ -9,7 +9,7 @@
         "notebook_path": "/Users/reportflex.ulisses@civilmaster.com.br/governed_ingestion/governed_ingestion_orchestrator",
         "base_parameters": {
           "catalog": "cm_dbx_dev",
-          "max_items": "5",
+          "max_items": "200",
           "max_parallelism": "1"
         }
       }

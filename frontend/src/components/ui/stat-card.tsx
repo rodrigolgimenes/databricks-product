@@ -1,4 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -8,6 +9,7 @@ interface StatCardProps {
   icon?: React.ReactNode;
   trend?: string;
   trendType?: "positive" | "negative" | "neutral";
+  description?: string;
   className?: string;
   loading?: boolean;
 }
@@ -18,9 +20,11 @@ const trendConfig = {
   neutral: { icon: Minus, color: "text-muted-foreground" },
 };
 
-export function StatCard({ title, value, icon, trend, trendType = "neutral", className, loading }: StatCardProps) {
+export function StatCard({ title, value, icon, trend, trendType = "neutral", description, className, loading }: StatCardProps) {
   const trendInfo = trendConfig[trendType];
   const TrendIcon = trendInfo.icon;
+
+  const tooltipText = description || title;
 
   return (
     <Card className={cn("hover:shadow-md transition-shadow", className)}>
@@ -31,7 +35,16 @@ export function StatCard({ title, value, icon, trend, trendType = "neutral", cla
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium text-muted-foreground truncate">{title}</p>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <p className="text-xs font-medium text-muted-foreground truncate cursor-help">{title}</p>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p className="text-xs">{tooltipText}</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           {loading ? (
             <div className="h-7 w-16 bg-muted animate-pulse rounded mt-1" />
           ) : (

@@ -63,6 +63,10 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [drawerRunId, setDrawerRunId] = useState<string | null>(null);
   const [drawerBp, setDrawerBp] = useState<any>(null);
+  const [sortKey, setSortKey] = useState("started_at");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   const fetchData = useCallback(async () => {
     try {
@@ -72,6 +76,10 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
         search: search || undefined,
         status: filters.status && filters.status !== "all" ? filters.status : undefined,
         period: filters.period && filters.period !== "all" ? filters.period : undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        sort_key: sortKey,
+        sort_dir: sortDir,
       });
       setData(result.items || []);
       setTotal(result.total || 0);
@@ -80,7 +88,7 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, search, filters]);
+  }, [page, pageSize, search, filters, dateFrom, dateTo, sortKey, sortDir]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -104,6 +112,7 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
     {
       key: "dataset_name",
       header: "Dataset",
+      sortable: true,
       render: (row) => (
         <div className="min-w-0">
           <Tooltip>
@@ -128,27 +137,23 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
     {
       key: "status",
       header: "Status",
+      sortable: true,
       render: (row) => <StatusBadge status={row.status} />,
     },
     {
       key: "started_at",
       header: "Início",
+      sortable: true,
       render: (row) => (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="text-xs whitespace-nowrap cursor-help">
-              {row.started_at ? new Date(row.started_at).toLocaleDateString("pt-BR") : "—"}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>
-            <p className="text-xs">{formatTs(row.started_at)}</p>
-          </TooltipContent>
-        </Tooltip>
+        <span className="text-xs whitespace-nowrap">
+          {formatTs(row.started_at)}
+        </span>
       ),
     },
     {
       key: "duration_seconds",
       header: "Duração",
+      sortable: true,
       className: "text-right",
       render: (row) => (
         <span className={`text-xs font-mono ${
@@ -163,6 +168,7 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
     {
       key: "load_type",
       header: "Tipo Carga",
+      sortable: true,
       render: (row) => {
         const type = row.load_type || "—";
         const color = type === "FULL" ? "bg-blue-100 text-blue-800" : type === "INCREMENTAL" ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800";
@@ -173,6 +179,7 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
       key: "rows_read",
       header: "Lidas",
       className: "text-right",
+      sortable: true,
       render: (row) => {
         if (row.load_type === "INCREMENTAL" && row.incremental_rows_read != null) {
           return (
@@ -189,6 +196,7 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
       key: "bronze_row_count",
       header: "Total Bronze",
       className: "text-right",
+      sortable: true,
       render: (row) => (
         <span className="text-xs font-mono text-muted-foreground">{fmtNum(row.bronze_row_count)}</span>
       ),
@@ -231,6 +239,7 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
       key: "silver_row_count",
       header: "Silver",
       className: "text-right",
+      sortable: true,
       render: (row) => <span className="text-xs font-mono">{fmtNum(row.silver_row_count)}</span>,
     },
     {
@@ -278,7 +287,24 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
         onSearchChange={(v) => { setSearch(v); setPage(1); }}
         onRefresh={fetchData}
         refreshing={loading}
-      />
+      >
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground whitespace-nowrap">Data:</span>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+            className="h-9 px-2 text-xs border rounded-md bg-background"
+          />
+          <span className="text-xs text-muted-foreground">até</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+            className="h-9 px-2 text-xs border rounded-md bg-background"
+          />
+        </div>
+      </FilterBar>
       <DataTable
         columns={columns}
         data={data}
@@ -287,6 +313,9 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
         pageSize={pageSize}
         onPageChange={setPage}
         onPageSizeChange={setPageSize}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onSort={(key, dir) => { setSortKey(key); setSortDir(dir); setPage(1); }}
         loading={loading}
         emptyMessage="Nenhuma execução encontrada."
         rowKey={(row) => row.run_id || String(Math.random())}

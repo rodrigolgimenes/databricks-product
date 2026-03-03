@@ -509,22 +509,103 @@ function registerPortalRoutes(app) {
     }
   });
 
-  app.get('/api/portal/connections/oracle', async (req, res) => {
-    const projectId = String(req.query.project_id || '').trim();
-    const areaId = String(req.query.area_id || '').trim();
+  // Create new project
+  app.post('/api/portal/projects', async (req, res) => {
+    const body = req.body || {};
+    const projectName = String(body.project_name || '').trim();
+    const description = String(body.description || '').trim();
+    const user = getRequestUser(req);
+
+    if (!projectName) {
+      return res.status(400).json({ ok: false, error: 'VALIDATION_ERROR', message: 'project_name é obrigatório.' });
+    }
 
     try {
-      const wh = [];
-      if (projectId) wh.push(`project_id = ${sqlStringLiteral(projectId)}`);
-      if (areaId) wh.push(`area_id = ${sqlStringLiteral(areaId)}`);
-      wh.push("approval_status = 'APPROVED'");
+      const projectId = crypto.randomUUID();
+      const now = new Date().toISOString().replace('T', ' ').replace('Z', '');
 
-      const where = wh.length ? `WHERE ${wh.join(' AND ')}` : '';
+      await db.query(
+        `INSERT INTO ${portalCfg.ctrlSchema}.projects\n` +
+          `(project_id, project_name, description, is_active, created_at, created_by)\n` +
+          `VALUES (${sqlStringLiteral(projectId)}, ${sqlStringLiteral(projectName)}, ${sqlStringLiteral(description)}, true, TIMESTAMP ${sqlStringLiteral(now)}, ${sqlStringLiteral(user)})`
+      );
 
+      console.log(`[PORTAL] Novo projeto criado: ${projectName} (${projectId}) por ${user}`);
+
+      return res.status(201).json({
+        ok: true,
+        item: {
+          project_id: projectId,
+          project_name: projectName,
+          description: description || null,
+          is_active: true,
+          created_at: now,
+          created_by: user,
+        },
+      });
+    } catch (e) {
+      if (e.code === 'DATABRICKS_NOT_CONFIGURED') return res.status(503).json(notConfiguredResponse(e));
+      return res.status(502).json({ ok: false, error: 'DATABRICKS_ERROR', message: e.message });
+    }
+  });
+
+  // Create new area
+  app.post('/api/portal/areas', async (req, res) => {
+    const body = req.body || {};
+    const projectId = String(body.project_id || '').trim();
+    const areaName = String(body.area_name || '').trim();
+    const description = String(body.description || '').trim();
+    const user = getRequestUser(req);
+
+    if (!projectId || !areaName) {
+      return res.status(400).json({ ok: false, error: 'VALIDATION_ERROR', message: 'project_id e area_name são obrigatórios.' });
+    }
+
+    try {
+      // Verify project exists
+      const projRows = await sqlQueryObjects(
+        `SELECT project_id FROM ${portalCfg.ctrlSchema}.projects WHERE project_id = ${sqlStringLiteral(projectId)} LIMIT 1`
+      );
+      if (!projRows.length) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND', message: 'Projeto não encontrado.' });
+      }
+
+      const areaId = crypto.randomUUID();
+      const now = new Date().toISOString().replace('T', ' ').replace('Z', '');
+
+      await db.query(
+        `INSERT INTO ${portalCfg.ctrlSchema}.areas\n` +
+          `(area_id, project_id, area_name, description, is_active, created_at, created_by)\n` +
+          `VALUES (${sqlStringLiteral(areaId)}, ${sqlStringLiteral(projectId)}, ${sqlStringLiteral(areaName)}, ${sqlStringLiteral(description)}, true, TIMESTAMP ${sqlStringLiteral(now)}, ${sqlStringLiteral(user)})`
+      );
+
+      console.log(`[PORTAL] Nova área criada: ${areaName} (${areaId}) no projeto ${projectId} por ${user}`);
+
+      return res.status(201).json({
+        ok: true,
+        item: {
+          area_id: areaId,
+          project_id: projectId,
+          area_name: areaName,
+          description: description || null,
+          is_active: true,
+          created_at: now,
+          created_by: user,
+        },
+      });
+    } catch (e) {
+      if (e.code === 'DATABRICKS_NOT_CONFIGURED') return res.status(503).json(notConfiguredResponse(e));
+      return res.status(502).json({ ok: false, error: 'DATABRICKS_ERROR', message: e.message });
+    }
+  });
+
+  app.get('/api/portal/connections/oracle', async (req, res) => {
+    try {
+      // Retorna TODAS as conexões aprovadas (disponíveis para qualquer projeto/área)
       const rows = await sqlQueryObjects(
         `SELECT connection_id, project_id, area_id, jdbc_url, secret_scope, secret_user_key, secret_pwd_key, approval_status, approved_by, approved_at\n` +
           `FROM ${portalCfg.ctrlSchema}.connections_oracle\n` +
-          `${where}\n` +
+          `WHERE approval_status = 'APPROVED'\n` +
           `ORDER BY approved_at DESC NULLS LAST, created_at DESC`
       );
 
@@ -934,10 +1015,35 @@ function registerPortalRoutes(app) {
   });
 
   // ===== MONITOR ENDPOINTS FOR V2.HTML =====
+
+  // Helper: cleanup orphaned queue items from deleted jobs (runs at most once every 10 min)
+  let lastOrphanCleanup = 0;
+  async function cleanupOrphanedQueueItems() {
+    const now = Date.now();
+    if (now - lastOrphanCleanup < 10 * 60 * 1000) return; // 10 min cooldown
+    lastOrphanCleanup = now;
+    try {
+      const result = await db.query(
+        `UPDATE ${portalCfg.opsSchema}.run_queue ` +
+        `SET status = 'CANCELLED', finished_at = current_timestamp(), ` +
+        `    last_error_message = 'Cancelado automaticamente: job excluído' ` +
+        `WHERE status IN ('PENDING', 'CLAIMED', 'RUNNING') ` +
+        `AND job_id IS NOT NULL ` +
+        `AND job_id NOT IN (SELECT job_id FROM ${portalCfg.ctrlSchema}.scheduled_jobs)`
+      );
+      // result may contain num_affected_rows depending on driver
+      console.log('[MONITOR] Orphan cleanup executed');
+    } catch (err) {
+      console.warn('[MONITOR] Orphan cleanup error:', err.message);
+    }
+  }
   
   // Queue statistics for KPIs (enriched with 24h metrics)
   app.get('/api/portal/monitor/queue/stats', async (req, res) => {
     try {
+      // Non-blocking orphan cleanup
+      cleanupOrphanedQueueItems().catch(() => {});
+
       const [queueStats, batchStats24h] = await Promise.all([
         sqlQueryObjects(
           `SELECT status, COUNT(*) AS count\n` +
@@ -1127,6 +1233,8 @@ LIMIT ${limit}
     const offset = (page - 1) * pageSize;
     const statusFilter = String(req.query.status || '').trim().toUpperCase();
     const search = String(req.query.search || '').trim();
+    const sortKey = String(req.query.sort_key || '').trim();
+    const sortDir = String(req.query.sort_dir || '').trim().toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
     
     try {
       const conditions = [];
@@ -1136,6 +1244,16 @@ LIMIT ${limit}
         conditions.push(`(LOWER(dc.dataset_name) LIKE LOWER(${term}) OR LOWER(rq.dataset_id) LIKE LOWER(${term}))`);
       }
       const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      const sortableColumns = {
+        dataset_name: 'dc.dataset_name',
+        status: 'rq.status',
+        requested_at: 'rq.requested_at',
+        priority: 'rq.priority',
+        attempt: 'rq.attempt',
+      };
+      const orderCol = sortableColumns[sortKey] || 'rq.requested_at';
+      const orderClause = `ORDER BY ${orderCol} ${sortDir}`;
 
       const [countResult, rows] = await Promise.all([
         sqlQueryObjects(
@@ -1153,7 +1271,7 @@ LIMIT ${limit}
             `FROM ${portalCfg.opsSchema}.run_queue rq\n` +
             `LEFT JOIN ${portalCfg.ctrlSchema}.dataset_control dc ON rq.dataset_id = dc.dataset_id\n` +
             `${whereClause}\n` +
-            `ORDER BY rq.requested_at DESC\n` +
+            `${orderClause}\n` +
             `LIMIT ${pageSize} OFFSET ${offset}`
         ),
       ]);
@@ -1176,6 +1294,10 @@ LIMIT ${limit}
     const search = String(req.query.search || '').trim();
     const statusFilter = String(req.query.status || '').trim().toUpperCase();
     const period = String(req.query.period || '').trim();
+    const dateFrom = String(req.query.date_from || '').trim();
+    const dateTo = String(req.query.date_to || '').trim();
+    const sortKey = String(req.query.sort_key || '').trim();
+    const sortDir = String(req.query.sort_dir || '').trim().toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
     
     try {
       const conditions = [];
@@ -1187,8 +1309,23 @@ LIMIT ${limit}
       if (period === '24h') conditions.push(`bp.started_at >= current_timestamp() - INTERVAL 24 HOURS`);
       else if (period === '7d') conditions.push(`bp.started_at >= current_timestamp() - INTERVAL 7 DAYS`);
       else if (period === '30d') conditions.push(`bp.started_at >= current_timestamp() - INTERVAL 30 DAYS`);
+      if (dateFrom) conditions.push(`bp.started_at >= TIMESTAMP ${sqlStringLiteral(dateFrom + ' 00:00:00')}`);
+      if (dateTo) conditions.push(`bp.started_at <= TIMESTAMP ${sqlStringLiteral(dateTo + ' 23:59:59')}`);
 
       const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      // Sortable columns whitelist
+      const sortableColumns = {
+        dataset_name: 'dc.dataset_name',
+        status: 'bp.status',
+        started_at: 'bp.started_at',
+        duration_seconds: 'duration_seconds',
+        load_type: 'bp.load_type',
+        bronze_row_count: 'bp.bronze_row_count',
+        silver_row_count: 'bp.silver_row_count',
+      };
+      const orderCol = sortableColumns[sortKey] || 'bp.started_at';
+      const orderClause = `ORDER BY ${orderCol} ${sortDir}`;
 
       const [countResult, rows] = await Promise.all([
         sqlQueryObjects(
@@ -1208,7 +1345,7 @@ LIMIT ${limit}
             `LEFT JOIN ${portalCfg.ctrlSchema}.dataset_control dc ON bp.dataset_id = dc.dataset_id\n` +
             `LEFT JOIN ${portalCfg.opsSchema}.batch_process_table_details td ON td.run_id = bp.run_id AND td.layer = 'BRONZE'\n` +
             `${whereClause}\n` +
-            `ORDER BY bp.started_at DESC\n` +
+            `${orderClause}\n` +
             `LIMIT ${pageSize} OFFSET ${offset}`
         ),
       ]);
@@ -1229,6 +1366,8 @@ LIMIT ${limit}
     const pageSize = Math.min(200, Math.max(1, parseInt(req.query.page_size, 10) || 25));
     const offset = (page - 1) * pageSize;
     const search = String(req.query.search || '').trim();
+    const sortKey = String(req.query.sort_key || '').trim();
+    const sortDir = String(req.query.sort_dir || '').trim().toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
     
     try {
       const conditions = ["rq.status = 'FAILED'"];
@@ -1237,6 +1376,17 @@ LIMIT ${limit}
         conditions.push(`(LOWER(dc.dataset_name) LIKE LOWER(${term}) OR LOWER(rq.dataset_id) LIKE LOWER(${term}))`);
       }
       const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+      const sortableColumns = {
+        dataset_name: 'dc.dataset_name',
+        last_error_class: 'rq.last_error_class',
+        requested_at: 'rq.requested_at',
+        attempt: 'rq.attempt',
+      };
+      const orderCol = sortableColumns[sortKey] || null;
+      const orderClause = orderCol
+        ? `ORDER BY ${orderCol} ${sortDir}`
+        : `ORDER BY rq.finished_at DESC NULLS LAST, rq.requested_at DESC`;
 
       const [countResult, rows] = await Promise.all([
         sqlQueryObjects(
@@ -1253,7 +1403,7 @@ LIMIT ${limit}
             `FROM ${portalCfg.opsSchema}.run_queue rq\n` +
             `LEFT JOIN ${portalCfg.ctrlSchema}.dataset_control dc ON rq.dataset_id = dc.dataset_id\n` +
             `${whereClause}\n` +
-            `ORDER BY rq.finished_at DESC NULLS LAST, rq.requested_at DESC\n` +
+            `${orderClause}\n` +
             `LIMIT ${pageSize} OFFSET ${offset}`
         ),
       ]);
@@ -2913,7 +3063,37 @@ LIMIT ${limit}
     }
   });
   
-  // Update naming convention (only if not active)
+  // Deactivate naming convention
+  app.post('/api/portal/admin/naming-conventions/:version/deactivate', async (req, res) => {
+    const version = parseIntStrict(req.params.version);
+    const user = getRequestUser(req);
+    
+    if (version == null) {
+      return res.status(400).json({ ok: false, error: 'VALIDATION_ERROR', message: 'versão inválida.' });
+    }
+    
+    try {
+      const exists = await sqlQueryObjects(
+        `SELECT naming_version, is_active FROM ${portalCfg.ctrlSchema}.naming_conventions WHERE naming_version = ${version}`
+      );
+      if (!exists.length) {
+        return res.status(404).json({ ok: false, error: 'NOT_FOUND', message: `Naming convention v${version} não encontrada.` });
+      }
+      
+      await db.query(
+        `UPDATE ${portalCfg.ctrlSchema}.naming_conventions SET is_active = false WHERE naming_version = ${version}`
+      );
+      
+      console.log(`[ADMIN] Naming convention v${version} desativada por ${user}`);
+      
+      return res.json({ ok: true, deactivated_version: version });
+    } catch (e) {
+      if (e.code === 'DATABRICKS_NOT_CONFIGURED') return res.status(503).json(notConfiguredResponse(e));
+      return res.status(502).json({ ok: false, error: 'DATABRICKS_ERROR', message: e.message });
+    }
+  });
+  
+  // Update naming convention
   app.patch('/api/portal/admin/naming-conventions/:version', async (req, res) => {
     const version = parseIntStrict(req.params.version);
     const body = req.body || {};
@@ -2924,15 +3104,12 @@ LIMIT ${limit}
     }
     
     try {
-      // Check if exists and is not active
+      // Check if exists
       const rows = await sqlQueryObjects(
         `SELECT is_active FROM ${portalCfg.ctrlSchema}.naming_conventions WHERE naming_version = ${version}`
       );
       if (!rows.length) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND', message: `Naming convention v${version} não encontrada.` });
-      }
-      if (rows[0].is_active) {
-        return res.status(409).json({ ok: false, error: 'ACTIVE_CONVENTION', message: 'Não é possível editar convenção ativa. Desative primeiro.' });
       }
       
       const updates = [];
@@ -2971,7 +3148,7 @@ LIMIT ${limit}
     }
   });
   
-  // Delete naming convention (only if not active)
+  // Delete naming convention
   app.delete('/api/portal/admin/naming-conventions/:version', async (req, res) => {
     const version = parseIntStrict(req.params.version);
     const user = getRequestUser(req);
@@ -2988,11 +3165,6 @@ LIMIT ${limit}
       
       if (!exists || exists.length === 0) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND', message: 'Convenção não encontrada.' });
-      }
-      
-      // Cannot delete active convention
-      if (exists[0].is_active) {
-        return res.status(400).json({ ok: false, error: 'VALIDATION_ERROR', message: 'Não é possível excluir a convenção ativa. Ative outra convenção primeiro.' });
       }
       
       // Delete

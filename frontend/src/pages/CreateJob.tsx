@@ -24,6 +24,8 @@ import {
   Settings,
   Save,
   AlertCircle,
+  Search,
+  X,
 } from 'lucide-react';
 import * as api from '@/lib/api';
 
@@ -59,6 +61,7 @@ const CreateJob = () => {
   const [areas, setAreas] = useState<any[]>([]);
   const [datasets, setDatasets] = useState<any[]>([]);
   const [selectedDatasets, setSelectedDatasets] = useState<string[]>([]);
+  const [datasetSearch, setDatasetSearch] = useState('');
 
   // Form state
   const [jobName, setJobName] = useState('');
@@ -220,11 +223,23 @@ const CreateJob = () => {
     );
   };
 
+  const filteredDatasets = datasets.filter((d) => {
+    if (!datasetSearch.trim()) return true;
+    const q = datasetSearch.toLowerCase();
+    return (
+      d.dataset_name?.toLowerCase().includes(q) ||
+      d.bronze_table?.toLowerCase().includes(q) ||
+      d.source_type?.toLowerCase().includes(q)
+    );
+  });
+
   const selectAllDatasets = () => {
-    if (selectedDatasets.length === datasets.length) {
-      setSelectedDatasets([]);
+    const filteredIds = filteredDatasets.map((d) => d.dataset_id);
+    const allFilteredSelected = filteredIds.every((id) => selectedDatasets.includes(id));
+    if (allFilteredSelected) {
+      setSelectedDatasets((prev) => prev.filter((id) => !filteredIds.includes(id)));
     } else {
-      setSelectedDatasets(datasets.map((d) => d.dataset_id));
+      setSelectedDatasets((prev) => [...new Set([...prev, ...filteredIds])]);
     }
   };
 
@@ -555,11 +570,30 @@ const CreateJob = () => {
             <div className="flex items-center justify-between">
               <CardTitle>Selecionar Datasets</CardTitle>
               <Button variant="outline" size="sm" onClick={selectAllDatasets}>
-                {selectedDatasets.length === datasets.length ? 'Desmarcar Todos' : 'Selecionar Todos'}
+                {filteredDatasets.length > 0 && filteredDatasets.every((d) => selectedDatasets.includes(d.dataset_id))
+                  ? 'Desmarcar Todos'
+                  : 'Selecionar Todos'}
               </Button>
             </div>
           </CardHeader>
           <CardContent>
+            <div className="relative mb-3">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Buscar por nome, tabela ou tipo..."
+                value={datasetSearch}
+                onChange={(e) => setDatasetSearch(e.target.value)}
+                className="pl-9 pr-9"
+              />
+              {datasetSearch && (
+                <button
+                  onClick={() => setDatasetSearch('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
             {datasets.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 <Database className="h-10 w-10 mx-auto mb-2 opacity-50" />
@@ -567,7 +601,7 @@ const CreateJob = () => {
               </div>
             ) : (
               <div className="space-y-2 max-h-96 overflow-y-auto">
-                {datasets.map((dataset) => (
+                {filteredDatasets.map((dataset) => (
                   <div
                     key={dataset.dataset_id}
                     className="flex items-center gap-3 p-3 border rounded hover:bg-muted/50 cursor-pointer"
@@ -590,11 +624,16 @@ const CreateJob = () => {
                 ))}
               </div>
             )}
-            <div className="mt-4 p-3 bg-muted rounded">
+            <div className="mt-4 p-3 bg-muted rounded flex items-center justify-between">
               <p className="text-sm font-medium">
                 {selectedDatasets.length} dataset{selectedDatasets.length !== 1 && 's'} selecionado
                 {selectedDatasets.length !== 1 && 's'}
               </p>
+              {datasetSearch && (
+                <p className="text-xs text-muted-foreground">
+                  Exibindo {filteredDatasets.length} de {datasets.length}
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>

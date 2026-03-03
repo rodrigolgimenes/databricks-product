@@ -62,7 +62,8 @@ async function createJob(config) {
         notebook_path: '/Shared/governed_ingestion_orchestrator',
         base_parameters: {
           job_id: job_id,
-          portal_api_url: PORTAL_URL
+          portal_api_url: PORTAL_URL,
+          max_items: '200'
         }
       },
       existing_cluster_id: DATABRICKS_CLUSTER_ID
