@@ -1730,21 +1730,78 @@ def _load_oracle_bronze_incremental(
     last_watermark = None
     lookback_days = int(metadata.get("lookback_days", 3))
     watermark_cutoff = None  # Data de corte efetiva usada na leitura
+    short_circuited = False  # Flag: carga pulada por ausência de dados novos
     
     if strategy == "WATERMARK" and watermark_col:
         if pk_cols:
             # -------------------------------------------------------
-            # CENÁRIO A: COM PK → filtro preciso pelo watermark salvo
+            # CENÁRIO A: COM PK → strict inequality (>) com lookback
+            # safety net para late-arriving data
+            #
+            # MELHORIA v2:
+            # 1. Usa > (strict) ao invés de >= para evitar releitura
+            #    redundante de registros na fronteira do watermark
+            # 2. Aplica lookback_days como rede de segurança para
+            #    capturar late-arriving data (dados retroativos)
+            # 3. Short-circuit: verifica se há dados novos ANTES de
+            #    fazer o SELECT completo (query leve no Oracle)
             # -------------------------------------------------------
             last_watermark = _get_last_watermark(dataset_id, catalog)
             print(f"[INCREMENTAL] DEBUG: _get_last_watermark returned: {last_watermark!r}")
             
             if last_watermark:
-                # Usar TO_TIMESTAMP para compatibilidade com NLS_DATE_FORMAT do Oracle
                 wm_str = str(last_watermark)
-                query = f"(SELECT * FROM {oracle_table} WHERE {watermark_col} >= TO_TIMESTAMP('{wm_str}', 'YYYY-MM-DD HH24:MI:SS')) src"
-                watermark_cutoff = wm_str
-                print(f"[INCREMENTAL] COM PK: WHERE {watermark_col} >= TO_TIMESTAMP('{wm_str}') (watermark salvo)")
+                
+                # MELHORIA 1+2: Cutoff = watermark - lookback_days (strict >)
+                # Calcula cutoff em Python para evitar problemas com INTERVAL via JDBC Oracle
+                from datetime import datetime as _dt, timedelta as _td
+                try:
+                    _wm_dt = _dt.strptime(wm_str.split('.')[0], '%Y-%m-%d %H:%M:%S')
+                    _cutoff_dt = _wm_dt - _td(days=lookback_days)
+                    _cutoff_str = _cutoff_dt.strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    _cutoff_str = wm_str  # Fallback: usar watermark original
+                
+                cutoff_expr = f"TO_TIMESTAMP('{_cutoff_str}', 'YYYY-MM-DD HH24:MI:SS')"
+                print(f"[INCREMENTAL] COM PK: watermark={wm_str}, lookback_days={lookback_days}")
+                print(f"[INCREMENTAL] COM PK: cutoff calculado = {_cutoff_str} (watermark - {lookback_days} dias)")
+                
+                # MELHORIA 3: Short-circuit check — query leve para verificar
+                # se há dados NOVOS (acima do watermark salvo) antes de ler tudo
+                try:
+                    sc_query = f"(SELECT MAX({watermark_col}) AS max_wm FROM {oracle_table} WHERE {watermark_col} > TO_TIMESTAMP('{wm_str}', 'YYYY-MM-DD HH24:MI:SS')) sc"
+                    print(f"[INCREMENTAL] SHORT-CIRCUIT: Verificando dados novos acima do watermark...")
+                    sc_df = (
+                        spark.read.format("jdbc")  # type: ignore[name-defined]
+                        .option("url", jdbc_url)
+                        .option("dbtable", sc_query)
+                        .option("user", user)
+                        .option("password", pwd)
+                        .option("driver", "oracle.jdbc.OracleDriver")
+                        .load()
+                    )
+                    sc_rows = sc_df.collect()
+                    has_new_data = bool(sc_rows and sc_rows[0]["max_wm"] is not None)
+                    sc_max = str(sc_rows[0]["max_wm"]) if has_new_data else None
+                    print(f"[INCREMENTAL] SHORT-CIRCUIT: has_new_data={has_new_data}, max_wm_na_origem={sc_max}")
+                except Exception as sc_err:
+                    # Se o short-circuit falhar, assume que há dados (fallback seguro)
+                    has_new_data = True
+                    print(f"[INCREMENTAL] SHORT-CIRCUIT: Erro na verificação (prosseguindo com leitura): {sc_err}")
+                
+                if not has_new_data:
+                    # Nenhum dado novo acima do watermark — pular carga pesada
+                    # Ainda lê com lookback como safety net (late-arriving data)
+                    # mas usa query otimizada
+                    print(f"[INCREMENTAL] SHORT-CIRCUIT: ⚡ Nenhum dado NOVO acima do watermark")
+                    print(f"[INCREMENTAL] SHORT-CIRCUIT: Verificando late-arriving data (lookback {lookback_days} dias)...")
+                    short_circuited = True
+                
+                # Query final: > (strict) com lookback safety net
+                query = f"(SELECT * FROM {oracle_table} WHERE {watermark_col} > {cutoff_expr}) src"
+                watermark_cutoff = f"{wm_str} - {lookback_days} dias"
+                print(f"[INCREMENTAL] COM PK: WHERE {watermark_col} > (watermark - {lookback_days} dias)")
+                print(f"[INCREMENTAL] COM PK: Query efetiva: WHERE {watermark_col} > TO_TIMESTAMP('{wm_str}') - {lookback_days} DAY")
             else:
                 # Primeira execução com PK: full read
                 query = f"(SELECT * FROM {oracle_table}) src"
@@ -1775,6 +1832,25 @@ def _load_oracle_bronze_incremental(
     
     row_count = df.count()
     print(f"[INCREMENTAL] Registros lidos do Oracle: {row_count:,}")
+    
+    # SHORT-CIRCUIT: Se não há dados novos E lookback também retornou 0 → skip Bronze/Silver
+    if short_circuited and row_count == 0:
+        print(f"[INCREMENTAL] ⚡ SHORT-CIRCUIT ATIVADO: 0 registros lidos, pulando MERGE Bronze/Silver")
+        print(f"[INCREMENTAL] ⚡ Watermark permanece em: {last_watermark}")
+        print(f"[INCREMENTAL] ========== Load Incremental Concluído (short-circuit) ==========")
+        return {
+            "oracle_table": oracle_table,
+            "bronze_row_count": 0,
+            "strategy": strategy,
+            "incremental": True,
+            "optimize_executed": False,
+            "watermark_start": str(last_watermark) if last_watermark else None,
+            "watermark_end": str(last_watermark) if last_watermark else None,
+            "short_circuited": True,
+        }
+    
+    if short_circuited and row_count > 0:
+        print(f"[INCREMENTAL] ⚠️ SHORT-CIRCUIT: Detectado late-arriving data! {row_count:,} registros no lookback window")
     
     # 4b.1 PRÉ-COMPUTAR max watermark ANTES do MERGE (evita re-leitura JDBC após MERGE)
     saved_watermark_end = None

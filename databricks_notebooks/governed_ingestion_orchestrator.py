@@ -1511,6 +1511,7 @@ def run_one(item: Dict[str, Any]) -> Dict[str, Any]:
     incremental_rows_read = None  # Apenas linhas incrementais
     watermark_start = None  # Início do range de watermark
     watermark_end = None  # Fim do range de watermark
+    is_short_circuited = False  # Flag: carga pulada por ausência de dados novos (otimização incremental)
 
     try:
         # Bronze
@@ -1692,13 +1693,26 @@ def run_one(item: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     load_type = "FULL"
                 
-                print(f"[RUN:BRONZE] ✓ Carga concluída com sucesso!")
-                print(f"[RUN:BRONZE] Tipo de carga: {load_type}")
-                print(f"[RUN:BRONZE] Registros carregados: {bronze_count:,}")
-                if load_type == "INCREMENTAL" and incremental_rows_read:
-                    print(f"[RUN:BRONZE] Linhas incrementais: {incremental_rows_read:,}")
-                if src_est is not None:
-                    print(f"[RUN:BRONZE] Estimativa da origem: {src_est:,}")
+                # Detectar short-circuit (sem dados novos na origem)
+                is_short_circuited = bool(b.get("short_circuited", False))
+                
+                if is_short_circuited:
+                    print(f"[RUN:BRONZE] ⚡ SHORT-CIRCUIT: Nenhum dado novo na origem Oracle")
+                    print(f"[RUN:BRONZE] ⚡ Bronze e Silver permanecem inalterados")
+                    load_type = "INCREMENTAL"
+                    incremental_rows_read = 0
+                    if b.get("watermark_end"):
+                        watermark_end = str(b["watermark_end"])
+                    if b.get("watermark_start"):
+                        watermark_start = str(b["watermark_start"])
+                else:
+                    print(f"[RUN:BRONZE] ✓ Carga concluída com sucesso!")
+                    print(f"[RUN:BRONZE] Tipo de carga: {load_type}")
+                    print(f"[RUN:BRONZE] Registros carregados: {bronze_count:,}")
+                    if load_type == "INCREMENTAL" and incremental_rows_read:
+                        print(f"[RUN:BRONZE] Linhas incrementais: {incremental_rows_read:,}")
+                    if src_est is not None:
+                        print(f"[RUN:BRONZE] Estimativa da origem: {src_est:,}")
                 
                 # Check if OPTIMIZE was executed (incremental only)
                 if b.get("optimize_executed"):
@@ -1710,16 +1724,17 @@ def run_one(item: Dict[str, Any]) -> Dict[str, Any]:
                     dataset_id=dataset_id,
                     layer="BRONZE",
                     table_name=bronze_table,
-                    operation=operation_type,
+                    operation="SHORT_CIRCUIT" if is_short_circuited else operation_type,
                     status="SUCCEEDED",
                     row_count=bronze_count,
                 )
+                _sc_msg = "bronze short-circuited (no new data)" if is_short_circuited else ("bronze loaded" + (" (incremental)" if enable_incremental else ""))
                 _update_step(
                     step_id=bronze_step,
                     status="SUCCEEDED",
                     progress_current=bronze_count,
                     finished=True,
-                    message="bronze loaded" + (" (incremental)" if enable_incremental else ""),
+                    message=_sc_msg,
                     details=b,
                 )
             except Exception as e:
@@ -2108,113 +2123,157 @@ def run_one(item: Dict[str, Any]) -> Dict[str, Any]:
             )
             _update_step(step_id=bronze_step, status="SUCCEEDED", progress_current=bronze_count, finished=True, message="bronze counted")
 
-        # Silver
-        print(f"[RUN:SILVER] Iniciando promoção para Silver...")
-        print(f"[RUN:SILVER] silver_table={silver_table}")
-        
-        silver_step = _insert_step(
-            run_id=run_id,
-            dataset_id=dataset_id,
-            phase="SILVER",
-            step_key="SILVER_PROMOTE",
-            status="RUNNING",
-            details={"silver_table": silver_table},
-        )
-
-        print(f"[RUN:SILVER] Buscando schema ACTIVE para dataset_id={dataset_id}...")
-        schema = _get_active_schema(dataset_id)
-        
-        # Auto-create schema from Bronze if missing (DRAFT datasets on first execution)
-        if not schema:
-            print(f"[RUN:SILVER] ⚠️ Nenhum schema ACTIVE encontrado")
-            print(f"[RUN:SILVER] ✨ PRIMEIRA EXECUÇÃO: Auto-gerando schema da Bronze...")
+        # -------------------------------------------------------
+        # SHORT-CIRCUIT: Pular Silver/Watermark quando não há dados novos
+        # Economiza tempo significativo evitando MERGE redundante
+        # -------------------------------------------------------
+        if is_short_circuited:
+            print(f"[RUN:SILVER] ⚡ SHORT-CIRCUIT: Pulando promoção Silver (sem dados novos)")
+            silver_count = bronze_count  # Manter contagem consistente (0 ou existente)
             
-            try:
-                schema = _auto_create_schema_from_bronze(
-                    dataset_id=dataset_id,
-                    bronze_table=bronze_table
-                )
-                print(f"[RUN:SILVER] ✓ Schema ACTIVE criado automaticamente!")
-            except Exception as e:
-                print(f"[RUN:SILVER] ✗ ERRO ao auto-gerar schema: {e}")
-                raise SchemaError(f"AUTO_SCHEMA_FAILED: {e}")
+            # Contar registros atuais na Silver para exibição correta
+            if _table_exists(silver_table):
+                try:
+                    silver_count = int(spark.table(silver_table).count())  # type: ignore[name-defined]
+                except Exception:
+                    pass
+            
+            silver_step = _insert_step(
+                run_id=run_id,
+                dataset_id=dataset_id,
+                phase="SILVER",
+                step_key="SILVER_PROMOTE",
+                status="RUNNING",
+                details={"silver_table": silver_table},
+            )
+            _write_table_details(
+                run_id=run_id,
+                dataset_id=dataset_id,
+                layer="SILVER",
+                table_name=silver_table,
+                operation="SHORT_CIRCUIT",
+                status="SUCCEEDED",
+                row_count=silver_count,
+            )
+            _update_step(
+                step_id=silver_step,
+                status="SUCCEEDED",
+                progress_current=silver_count,
+                finished=True,
+                message="silver short-circuited (no new data)",
+            )
+            
+            # Watermark: não atualizar (não há dados novos)
+            wm_step = _insert_step(run_id=run_id, dataset_id=dataset_id, phase="ORCHESTRATOR", step_key="WATERMARK", status="RUNNING")
+            _update_step(step_id=wm_step, status="SUCCEEDED", finished=True, message="skipped (short-circuit)")
         else:
-            print(f"[RUN:SILVER] ✓ Schema ACTIVE encontrado")
-        
-        # Sync schema with incremental_metadata if divergent
-        # (resolves: schema created before incremental was enabled)
-        schema = _sync_schema_with_incremental(dataset_id, schema, ds)
-        
-        print(f"[RUN:SILVER] Aplicando transformações (cast + dedupe + merge)...")
+            # Silver (execução normal)
+            print(f"[RUN:SILVER] Iniciando promoção para Silver...")
+            print(f"[RUN:SILVER] silver_table={silver_table}")
+            
+            silver_step = _insert_step(
+                run_id=run_id,
+                dataset_id=dataset_id,
+                phase="SILVER",
+                step_key="SILVER_PROMOTE",
+                status="RUNNING",
+                details={"silver_table": silver_table},
+            )
 
-        # -------------------------------------------------------
-        # SILVER INCREMENTAL: Filtrar Bronze pela janela de watermark
-        # Quando SEM PK + watermark: lê apenas o range do lookback
-        # Quando COM PK: lê tudo (MERGE por PK resolve dedupe)
-        # -------------------------------------------------------
-        bronze_df = spark.table(bronze_table)  # type: ignore[name-defined]
-        silver_replace_condition = None
-        silver_write_mode = "auto"
-        silver_operation = "MERGE" if schema.get("primary_key") else "OVERWRITE"
-        
-        ds_bronze_mode = ds.get("bronze_mode", "SNAPSHOT")
-        
-        if enable_incremental and load_type == "INCREMENTAL" and not schema.get("primary_key"):
-            # SEM PK incremental: tentar usar replaceWhere na Silver
-            try:
-                _meta_json = ds.get("incremental_metadata")
-                _meta = json.loads(_meta_json) if isinstance(_meta_json, str) else (_meta_json or {})
-                _wm_col = _meta.get("watermark_column") or _meta.get("watermark_col")
-                _pk = _meta.get("pk", [])
-                _lb_days = int(_meta.get("lookback_days", 3))
+            print(f"[RUN:SILVER] Buscando schema ACTIVE para dataset_id={dataset_id}...")
+            schema = _get_active_schema(dataset_id)
+            
+            # Auto-create schema from Bronze if missing (DRAFT datasets on first execution)
+            if not schema:
+                print(f"[RUN:SILVER] ⚠️ Nenhum schema ACTIVE encontrado")
+                print(f"[RUN:SILVER] ✨ PRIMEIRA EXECUÇÃO: Auto-gerando schema da Bronze...")
                 
-                if _wm_col and not _pk:
-                    # Verificar se a coluna de watermark existe no schema Silver
-                    silver_cols = [c["name"] for c in (schema.get("columns") or [])]
-                    if _wm_col in silver_cols:
-                        silver_replace_condition = f"{_wm_col} >= CURRENT_TIMESTAMP() - INTERVAL {_lb_days} DAYS"
-                        silver_write_mode = "REPLACE_WHERE"
-                        silver_operation = "REPLACE_WHERE"
-                        
-                        # Filtrar Bronze: ler apenas a janela do lookback (não toda a tabela)
-                        bronze_df = bronze_df.filter(F.col(_wm_col) >= F.expr(f"CURRENT_TIMESTAMP() - INTERVAL {_lb_days} DAYS"))
-                        print(f"[RUN:SILVER] ✨ SEM PK incremental: lendo Bronze filtrada por {_wm_col} (lookback {_lb_days} dias)")
-                        print(f"[RUN:SILVER] replaceWhere condition: {silver_replace_condition}")
-                    else:
-                        print(f"[RUN:SILVER] ⚠️ Coluna {_wm_col} não encontrada no schema Silver → OVERWRITE")
-            except Exception as meta_err:
-                print(f"[RUN:SILVER] ⚠️ Erro ao parsear metadata para Silver incremental: {meta_err}")
-        
-        # Fallback: APPEND_LOG ou OVERWRITE
-        if silver_write_mode == "auto":
-            if ds_bronze_mode == "APPEND_LOG":
-                silver_write_mode = "APPEND"
-                silver_operation = "APPEND"
-        
-        print(f"[RUN:SILVER] Aplicando cast plan...")
-        casted = _apply_cast_plan(bronze_df, schema)
-        print(f"[RUN:SILVER] Aplicando deduplicação LWW...")
-        deduped = _dedupe_lww(casted, schema)
-        
-        print(f"[RUN:SILVER] Executando escrita Silver (write_mode={silver_write_mode})...")
-        silver_count = _merge_to_silver(deduped, silver_table, schema, write_mode=silver_write_mode, replace_condition=silver_replace_condition)
-        print(f"[RUN:SILVER] ✓ Silver concluído! Registros processados: {silver_count:,}")
+                try:
+                    schema = _auto_create_schema_from_bronze(
+                        dataset_id=dataset_id,
+                        bronze_table=bronze_table
+                    )
+                    print(f"[RUN:SILVER] ✓ Schema ACTIVE criado automaticamente!")
+                except Exception as e:
+                    print(f"[RUN:SILVER] ✗ ERRO ao auto-gerar schema: {e}")
+                    raise SchemaError(f"AUTO_SCHEMA_FAILED: {e}")
+            else:
+                print(f"[RUN:SILVER] ✓ Schema ACTIVE encontrado")
+            
+            # Sync schema with incremental_metadata if divergent
+            # (resolves: schema created before incremental was enabled)
+            schema = _sync_schema_with_incremental(dataset_id, schema, ds)
+            
+            print(f"[RUN:SILVER] Aplicando transformações (cast + dedupe + merge)...")
 
-        _write_table_details(
-            run_id=run_id,
-            dataset_id=dataset_id,
-            layer="SILVER",
-            table_name=silver_table,
-            operation=silver_operation,
-            status="SUCCEEDED",
-            row_count=silver_count,
-        )
-        _update_step(step_id=silver_step, status="SUCCEEDED", progress_current=silver_count, finished=True, message="silver promoted")
+            # -------------------------------------------------------
+            # SILVER INCREMENTAL: Filtrar Bronze pela janela de watermark
+            # Quando SEM PK + watermark: lê apenas o range do lookback
+            # Quando COM PK: lê tudo (MERGE por PK resolve dedupe)
+            # -------------------------------------------------------
+            bronze_df = spark.table(bronze_table)  # type: ignore[name-defined]
+            silver_replace_condition = None
+            silver_write_mode = "auto"
+            silver_operation = "MERGE" if schema.get("primary_key") else "OVERWRITE"
+            
+            ds_bronze_mode = ds.get("bronze_mode", "SNAPSHOT")
+            
+            if enable_incremental and load_type == "INCREMENTAL" and not schema.get("primary_key"):
+                # SEM PK incremental: tentar usar replaceWhere na Silver
+                try:
+                    _meta_json = ds.get("incremental_metadata")
+                    _meta = json.loads(_meta_json) if isinstance(_meta_json, str) else (_meta_json or {})
+                    _wm_col = _meta.get("watermark_column") or _meta.get("watermark_col")
+                    _pk = _meta.get("pk", [])
+                    _lb_days = int(_meta.get("lookback_days", 3))
+                    
+                    if _wm_col and not _pk:
+                        # Verificar se a coluna de watermark existe no schema Silver
+                        silver_cols = [c["name"] for c in (schema.get("columns") or [])]
+                        if _wm_col in silver_cols:
+                            silver_replace_condition = f"{_wm_col} >= CURRENT_TIMESTAMP() - INTERVAL {_lb_days} DAYS"
+                            silver_write_mode = "REPLACE_WHERE"
+                            silver_operation = "REPLACE_WHERE"
+                            
+                            # Filtrar Bronze: ler apenas a janela do lookback (não toda a tabela)
+                            bronze_df = bronze_df.filter(F.col(_wm_col) >= F.expr(f"CURRENT_TIMESTAMP() - INTERVAL {_lb_days} DAYS"))
+                            print(f"[RUN:SILVER] ✨ SEM PK incremental: lendo Bronze filtrada por {_wm_col} (lookback {_lb_days} dias)")
+                            print(f"[RUN:SILVER] replaceWhere condition: {silver_replace_condition}")
+                        else:
+                            print(f"[RUN:SILVER] ⚠️ Coluna {_wm_col} não encontrada no schema Silver → OVERWRITE")
+                except Exception as meta_err:
+                    print(f"[RUN:SILVER] ⚠️ Erro ao parsear metadata para Silver incremental: {meta_err}")
+            
+            # Fallback: APPEND_LOG ou OVERWRITE
+            if silver_write_mode == "auto":
+                if ds_bronze_mode == "APPEND_LOG":
+                    silver_write_mode = "APPEND"
+                    silver_operation = "APPEND"
+            
+            print(f"[RUN:SILVER] Aplicando cast plan...")
+            casted = _apply_cast_plan(bronze_df, schema)
+            print(f"[RUN:SILVER] Aplicando deduplicação LWW...")
+            deduped = _dedupe_lww(casted, schema)
+            
+            print(f"[RUN:SILVER] Executando escrita Silver (write_mode={silver_write_mode})...")
+            silver_count = _merge_to_silver(deduped, silver_table, schema, write_mode=silver_write_mode, replace_condition=silver_replace_condition)
+            print(f"[RUN:SILVER] ✓ Silver concluído! Registros processados: {silver_count:,}")
 
-        # Watermark
-        wm_step = _insert_step(run_id=run_id, dataset_id=dataset_id, phase="ORCHESTRATOR", step_key="WATERMARK", status="RUNNING")
-        _update_watermark(dataset_id, schema, casted, run_id)
-        _update_step(step_id=wm_step, status="SUCCEEDED", finished=True)
+            _write_table_details(
+                run_id=run_id,
+                dataset_id=dataset_id,
+                layer="SILVER",
+                table_name=silver_table,
+                operation=silver_operation,
+                status="SUCCEEDED",
+                row_count=silver_count,
+            )
+            _update_step(step_id=silver_step, status="SUCCEEDED", progress_current=silver_count, finished=True, message="silver promoted")
+
+            # Watermark
+            wm_step = _insert_step(run_id=run_id, dataset_id=dataset_id, phase="ORCHESTRATOR", step_key="WATERMARK", status="RUNNING")
+            _update_watermark(dataset_id, schema, casted, run_id)
+            _update_step(step_id=wm_step, status="SUCCEEDED", finished=True)
 
         # finalize
         print(f"[RUN] ✓ EXECUÇÃO CONCLUÍDA COM SUCESSO!")
