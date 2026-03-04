@@ -24,3 +24,5 @@ env:
     value: 'https://ingestao-governada-3958128530848672.aws.databricksapps.com'
   - name: DATABRICKS_ORCHESTRATOR_JOB_ID
     value: '690887429046802'
+  - name: DATABRICKS_TOKEN
+    valueFrom: 'ingestao-governada/databricks-token'
