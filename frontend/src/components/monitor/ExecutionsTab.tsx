@@ -6,8 +6,9 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ExternalLink, FileText, ArrowDownToLine, Database, ArrowUpDown } from "lucide-react";
+import { ExternalLink, FileText, ArrowDownToLine, Database, ArrowUpDown, Loader2 } from "lucide-react";
 import { RunDetailPanel } from "@/components/RunDetailPanel";
+import { RunningPhaseBadge } from "@/components/monitor/RunningPhaseBadge";
 import * as api from "@/lib/api";
 
 const formatDuration = (seconds: any) => {
@@ -138,7 +139,14 @@ export function ExecutionsTab({ pollingInterval, isActive }: ExecutionsTabProps)
       key: "status",
       header: "Status",
       sortable: true,
-      render: (row) => <StatusBadge status={row.status} />,
+      render: (row) => (
+        <div className="flex flex-col gap-1">
+          <StatusBadge status={row.status} />
+          {["RUNNING", "CLAIMED"].includes(String(row.status).toUpperCase()) && row.run_id && (
+            <RunningPhaseBadge runId={row.run_id} />
+          )}
+        </div>
+      ),
     },
     {
       key: "started_at",

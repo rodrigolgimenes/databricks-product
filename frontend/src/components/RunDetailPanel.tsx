@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -12,6 +12,7 @@ import { useViewMode } from "@/contexts/ViewModeContext";
 import { interpretRunData, type RunInterpretationInput } from "@/lib/run-interpretation";
 import { RunExecutiveSummary } from "@/components/RunExecutiveSummary";
 import { RunDiagnosticCard } from "@/components/RunDiagnosticCard";
+import { PipelineStepper } from "@/components/PipelineStepper";
 
 /* ── helpers ────────────────────────────────────────── */
 
@@ -78,6 +79,7 @@ const RunDetailPanel = ({ runId, autoLoad = true, batchProcess: bpProp, compact 
   const [showError, setShowError] = useState(false);
   const [showStacktrace, setShowStacktrace] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Engineering mode: expand technical details by default
   useEffect(() => {
@@ -89,6 +91,24 @@ const RunDetailPanel = ({ runId, autoLoad = true, batchProcess: bpProp, compact 
     fetchRunData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId, autoLoad]);
+
+  // Auto-poll run data every 5s when execution is RUNNING
+  const currentStatus = String(runData?.batch_process?.status || bpProp?.status || "").toUpperCase();
+  const isRunningExecution = ["RUNNING", "CLAIMED"].includes(currentStatus);
+
+  useEffect(() => {
+    if (isRunningExecution && runId) {
+      pollRef.current = setInterval(async () => {
+        try {
+          const data = await api.getRunDetails(runId);
+          setRunData(data);
+        } catch { /* ignore polling errors */ }
+      }, 5000);
+    }
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [runId, isRunningExecution]);
 
   const fetchRunData = async () => {
     setLoading(true);
@@ -187,6 +207,17 @@ const RunDetailPanel = ({ runId, autoLoad = true, batchProcess: bpProp, compact 
 
   return (
     <div className={`space-y-3 ${compact ? "" : "mt-2"}`}>
+
+      {/* ══════════════════════════════════════════════ */}
+      {/* PIPELINE STEPPER — visual pipeline phases     */}
+      {/* ══════════════════════════════════════════════ */}
+      {bp && runId && (
+        <PipelineStepper
+          runId={runId}
+          runStatus={bp.status || ""}
+          batchProcess={bp}
+        />
+      )}
 
       {/* ══════════════════════════════════════════════ */}
       {/* CAMADA 1 — Resumo Executivo (sempre visível)  */}
@@ -297,6 +328,23 @@ const RunDetailPanel = ({ runId, autoLoad = true, batchProcess: bpProp, compact 
                 <p className="font-medium text-sm flex items-center gap-1 text-green-800">
                   <ArrowRight className="h-3.5 w-3.5" /> Carga Incremental — Detalhes do MERGE
                 </p>
+                {/* Watermark column indicator */}
+                {(dsCtx?.watermark_info?.column || (typeof dsCtx?.incremental_metadata === 'object' && dsCtx?.incremental_metadata?.watermark_column)) && (
+                  <div className="flex items-center gap-2 px-2 py-1.5 bg-green-100 border border-green-300 rounded text-xs">
+                    <Clock className="h-3.5 w-3.5 text-green-700 flex-shrink-0" />
+                    <span className="text-green-800">
+                      <span className="text-muted-foreground">Coluna Delta:</span>{" "}
+                      <span className="font-mono font-semibold text-green-900">
+                        {dsCtx?.watermark_info?.column || (typeof dsCtx?.incremental_metadata === 'object' && dsCtx.incremental_metadata.watermark_column) || "—"}
+                      </span>
+                    </span>
+                    {dsCtx?.watermark_info?.type && (
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-green-400 text-green-700">
+                        {dsCtx.watermark_info.type}
+                      </Badge>
+                    )}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   <div>
                     <span className="text-muted-foreground">Linhas Lidas:</span>{" "}

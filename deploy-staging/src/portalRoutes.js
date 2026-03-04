@@ -889,7 +889,7 @@ function registerPortalRoutes(app) {
       const datasetId = bp[0].dataset_id;
       if (datasetId) {
         try {
-          const [dsRows, prevRows, wmRows] = await Promise.all([
+          const [dsRows, prevRows] = await Promise.all([
             sqlQueryObjects(
               `SELECT incremental_strategy, incremental_metadata, discovery_status,\n` +
                 `       discovery_suggestion, enable_incremental, strategy_decision_log\n` +
@@ -907,12 +907,6 @@ function registerPortalRoutes(app) {
                 `  AND status = 'SUCCEEDED'\n` +
                 `  AND run_id != ${sqlStringLiteral(runId)}\n` +
                 `ORDER BY finished_at DESC\n` +
-                `LIMIT 1`
-            ),
-            sqlQueryObjects(
-              `SELECT watermark_column, watermark_type, watermark_value\n` +
-                `FROM ${portalCfg.opsSchema}.dataset_watermark\n` +
-                `WHERE dataset_id = ${sqlStringLiteral(datasetId)}\n` +
                 `LIMIT 1`
             ),
           ]);
@@ -934,16 +928,6 @@ function registerPortalRoutes(app) {
               discovery_suggestion: ds.discovery_suggestion || null,
               enable_incremental: ds.enable_incremental ?? false,
               strategy_decision_log: strategyDecisionLog || null,
-            };
-          }
-          // Attach watermark info (column, type, current value)
-          if (wmRows.length) {
-            const wm = wmRows[0];
-            if (!dataset_context) dataset_context = {};
-            dataset_context.watermark_info = {
-              column: wm.watermark_column || null,
-              type: wm.watermark_type || null,
-              current_value: wm.watermark_value || null,
             };
           }
           if (prevRows.length) {
@@ -3868,89 +3852,7 @@ LIMIT ${limit}
       console.log(`[UPDATE_INCREMENTAL_CONFIG] Executando SQL:\n${updateSql}`);
       await db.query(updateSql);
 
-      console.log(`[UPDATE_INCREMENTAL_CONFIG] \u2713 Configura\u00e7\u00f5es atualizadas`);
-
-      // ── Propagate watermark column change to dataset_watermark + schema_versions ──
-      // When user changes the watermark column, we must sync all sources of truth
-      if (req.body.incremental_metadata) {
-        try {
-          const newMeta = typeof req.body.incremental_metadata === 'string'
-            ? JSON.parse(req.body.incremental_metadata)
-            : req.body.incremental_metadata;
-          const newWmCol = String(newMeta.watermark_column || '').trim();
-
-          // Detect if watermark column actually changed
-          let oldWmCol = '';
-          try {
-            const oldMeta = ds.incremental_metadata ? JSON.parse(ds.incremental_metadata) : {};
-            oldWmCol = String(oldMeta.watermark_column || '').trim();
-          } catch {}
-
-          if (newWmCol && newWmCol !== oldWmCol) {
-            console.log(`[UPDATE_INCREMENTAL_CONFIG] Watermark column changed: ${oldWmCol || '(none)'} → ${newWmCol}`);
-
-            // a) Sync dataset_watermark (UPDATE or INSERT)
-            try {
-              const wmExists = await sqlQueryObjects(
-                `SELECT dataset_id FROM ${portalCfg.opsSchema}.dataset_watermark WHERE dataset_id = ${sqlStringLiteral(datasetId)} LIMIT 1`
-              );
-              if (wmExists.length) {
-                await db.query(
-                  `UPDATE ${portalCfg.opsSchema}.dataset_watermark\n` +
-                    `SET watermark_column = ${sqlStringLiteral(newWmCol)},\n` +
-                    `    watermark_type = 'TIMESTAMP',\n` +
-                    `    last_updated_at = current_timestamp()\n` +
-                    `WHERE dataset_id = ${sqlStringLiteral(datasetId)}`
-                );
-                console.log(`[UPDATE_INCREMENTAL_CONFIG] ✓ dataset_watermark.watermark_column updated to ${newWmCol}`);
-              } else {
-                console.log(`[UPDATE_INCREMENTAL_CONFIG] dataset_watermark not yet created (first run will create it)`);
-              }
-            } catch (wmErr) {
-              console.warn(`[UPDATE_INCREMENTAL_CONFIG] ⚠ Failed to sync dataset_watermark: ${wmErr.message}`);
-            }
-
-            // b) Sync schema_versions (ACTIVE) — update watermark.column + order_column
-            try {
-              const schemaRows = await sqlQueryObjects(
-                `SELECT schema_version, expect_schema_json FROM ${portalCfg.ctrlSchema}.schema_versions\n` +
-                  `WHERE dataset_id = ${sqlStringLiteral(datasetId)} AND status = 'ACTIVE' LIMIT 1`
-              );
-              if (schemaRows.length) {
-                let schemaJson = schemaRows[0].expect_schema_json;
-                if (typeof schemaJson === 'string') {
-                  try { schemaJson = JSON.parse(schemaJson); } catch { schemaJson = null; }
-                }
-                if (schemaJson && typeof schemaJson === 'object') {
-                  // Detect watermark type from columns
-                  let wmType = 'string';
-                  const cols = schemaJson.columns || [];
-                  const wmColDef = cols.find((c) => c.name === newWmCol);
-                  if (wmColDef && /timestamp/i.test(String(wmColDef.type || ''))) wmType = 'timestamp';
-
-                  schemaJson.watermark = { column: newWmCol, type: wmType };
-                  schemaJson.order_column = newWmCol;
-                  const updatedSchemaStr = JSON.stringify(schemaJson);
-
-                  await db.query(
-                    `UPDATE ${portalCfg.ctrlSchema}.schema_versions\n` +
-                      `SET expect_schema_json = ${sqlStringLiteral(updatedSchemaStr)},\n` +
-                      `    created_at = current_timestamp(),\n` +
-                      `    created_by = 'incremental_config_sync'\n` +
-                      `WHERE dataset_id = ${sqlStringLiteral(datasetId)} AND status = 'ACTIVE'`
-                  );
-                  console.log(`[UPDATE_INCREMENTAL_CONFIG] ✓ schema_versions.watermark synced to ${newWmCol} (${wmType})`);
-                }
-              }
-            } catch (schemaErr) {
-              console.warn(`[UPDATE_INCREMENTAL_CONFIG] ⚠ Failed to sync schema_versions: ${schemaErr.message}`);
-            }
-          }
-        } catch (propagateErr) {
-          // Non-fatal: log and continue
-          console.warn(`[UPDATE_INCREMENTAL_CONFIG] ⚠ Watermark propagation error: ${propagateErr.message}`);
-        }
-      }
+      console.log(`[UPDATE_INCREMENTAL_CONFIG] ✓ Configurações atualizadas`);
 
       // Return updated config
       const updatedDs = await sqlQueryObjects(

@@ -565,33 +565,42 @@ const DatasetDetail = () => {
               ) : preview.error ? (
                 <p className="text-muted-foreground">{preview.error}</p>
               ) : (
-                <div className="overflow-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b">
-                        {(preview.columns || []).map((col: any, i: number) => (
-                          <th key={i} className="text-left p-2 font-medium text-muted-foreground whitespace-nowrap">
-                            {col.name}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(preview.rows || []).map((row: any[], ri: number) => (
-                        <tr key={ri} className="border-b hover:bg-muted/30">
-                          {row.map((cell, ci) => (
-                            <td key={ci} className="p-2 whitespace-nowrap font-mono text-xs">
-                              {cell === null ? <span className="text-muted-foreground italic">null</span> : String(cell)}
-                            </td>
+                <>
+                  <div className="text-xs text-muted-foreground mb-2">
+                    {(preview.rows || []).length} linha{(preview.rows || []).length !== 1 && 's'} · {(preview.columns || []).length} coluna{(preview.columns || []).length !== 1 && 's'}
+                  </div>
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                      <table className="text-sm border-collapse" style={{ minWidth: `${Math.max(800, (preview.columns || []).length * 160)}px` }}>
+                        <thead className="sticky top-0 z-10">
+                          <tr className="bg-muted/80 backdrop-blur-sm border-b">
+                            <th className="text-right px-3 py-2 text-xs font-medium text-muted-foreground border-r bg-muted/80 w-12">#</th>
+                            {(preview.columns || []).map((col: any, i: number) => (
+                              <th key={i} className="text-left px-3 py-2 font-medium text-xs text-muted-foreground whitespace-nowrap border-r last:border-r-0 min-w-[120px]">
+                                <span className="text-[10px] text-muted-foreground/60 mr-1">Aᵇc</span> {col.name}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(preview.rows || []).map((row: any[], ri: number) => (
+                            <tr key={ri} className="border-b last:border-b-0 hover:bg-blue-50/50 transition-colors">
+                              <td className="text-right px-3 py-1.5 text-xs text-muted-foreground border-r bg-muted/30 tabular-nums">{ri + 1}</td>
+                              {row.map((cell, ci) => (
+                                <td key={ci} className="px-3 py-1.5 whitespace-nowrap font-mono text-xs border-r last:border-r-0 max-w-[300px] truncate" title={cell === null ? 'null' : String(cell)}>
+                                  {cell === null ? <span className="text-muted-foreground/50 italic">null</span> : String(cell)}
+                                </td>
+                              ))}
+                            </tr>
                           ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                   {(preview.rows || []).length === 0 && (
                     <p className="text-center py-6 text-muted-foreground">Sem dados para exibir.</p>
                   )}
-                </div>
+                </>
               )}
             </CardContent>
           </Card>

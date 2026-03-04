@@ -1,0 +1,31 @@
+[0;31m---------------------------------------------------------------------------[0m
+[0;31mValueError[0m                                Traceback (most recent call last)
+File [0;32m/databricks/spark/python/pyspark/sql/types.py:3737[0m, in [0;36mRow.__getitem__[0;34m(self, item)[0m
+[1;32m   3734[0m [38;5;28;01mtry[39;00m:
+[1;32m   3735[0m     [38;5;66;03m# it will be slow when it has many fields,[39;00m
+[1;32m   3736[0m     [38;5;66;03m# but this will not be used in normal cases[39;00m
+[0;32m-> 3737[0m     idx [38;5;241m=[39m [38;5;28;43mself[39;49m[38;5;241;43m.[39;49m[43m__fields__[49m[38;5;241;43m.[39;49m[43mindex[49m[43m([49m[43mitem[49m[43m)[49m
+[1;32m   3738[0m     [38;5;28;01mreturn[39;00m [38;5;28msuper[39m(Row, [38;5;28mself[39m)[38;5;241m.[39m[38;5;21m__getitem__[39m(idx)
+
+[0;31mValueError[0m: 'cnt' is not in list
+
+During handling of the above exception, another exception occurred:
+
+[0;31mPySparkValueError[0m                         Traceback (most recent call last)
+File [0;32m~/.ipykernel/132209/command--1-2004016350:60[0m
+[1;32m     49[0m df [38;5;241m=[39m (
+[1;32m     50[0m     spark[38;5;241m.[39mread[38;5;241m.[39mformat([38;5;124m"[39m[38;5;124mjdbc[39m[38;5;124m"[39m)
+[1;32m     51[0m     [38;5;241m.[39moption([38;5;124m"[39m[38;5;124murl[39m[38;5;124m"[39m, JDBC_URL)
+[0;32m   (...)[0m
+[1;32m     56[0m     [38;5;241m.[39mload()
+[1;32m     57[0m )
+[1;32m     59[0m result [38;5;241m=[39m df[38;5;241m.[39mcollect()
+[0;32m---> 60[0m count [38;5;241m=[39m [43mresult[49m[43m[[49m[38;5;241;43m0[39;49m[43m][49m[43m[[49m[38;5;124;43m"[39;49m[38;5;124;43mcnt[39;49m[38;5;124;43m"[39;49m[43m][49m
+[1;32m     61[0m [38;5;28mprint[39m([38;5;124m"[39m[38;5;124mORACLE_COUNT=[39m[38;5;124m"[39m [38;5;241m+[39m [38;5;28mstr[39m(count))
+
+File [0;32m/databricks/spark/python/pyspark/sql/types.py:3742[0m, in [0;36mRow.__getitem__[0;34m(self, item)[0m
+[1;32m   3740[0m     [38;5;28;01mraise[39;00m PySparkKeyError(errorClass[38;5;241m=[39m[38;5;124m"[39m[38;5;124mKEY_NOT_EXISTS[39m[38;5;124m"[39m, messageParameters[38;5;241m=[39m{[38;5;124m"[39m[38;5;124mkey[39m[38;5;124m"[39m: [38;5;28mstr[39m(item)})
+[1;32m   3741[0m [38;5;28;01mexcept[39;00m [38;5;167;01mValueError[39;00m:
+[0;32m-> 3742[0m     [38;5;28;01mraise[39;00m PySparkValueError(item)
+
+[0;31mPySparkValueError[0m: cnt

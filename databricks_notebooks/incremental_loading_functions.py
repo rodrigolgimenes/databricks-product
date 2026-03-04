@@ -1735,16 +1735,16 @@ def _load_oracle_bronze_incremental(
     if strategy == "WATERMARK" and watermark_col:
         if pk_cols:
             # -------------------------------------------------------
-            # CENÁRIO A: COM PK → strict inequality (>) com lookback
+            # CENÁRIO A: COM PK → inclusive inequality (>=) com lookback
             # safety net para late-arriving data
             #
-            # MELHORIA v2:
-            # 1. Usa > (strict) ao invés de >= para evitar releitura
-            #    redundante de registros na fronteira do watermark
+            # MELHORIA v2 (padronizado Fivetran/Airbyte/dbt):
+            # 1. Usa >= (inclusive) — padrão de mercado para CDC/watermark
+            #    MERGE idempotente absorve releitura na fronteira
             # 2. Aplica lookback_days como rede de segurança para
             #    capturar late-arriving data (dados retroativos)
             # 3. Short-circuit: verifica se há dados novos ANTES de
-            #    fazer o SELECT completo (query leve no Oracle)
+            #    fazer o SELECT completo (query leve com > estrito)
             # -------------------------------------------------------
             last_watermark = _get_last_watermark(dataset_id, catalog)
             print(f"[INCREMENTAL] DEBUG: _get_last_watermark returned: {last_watermark!r}")
@@ -1752,7 +1752,7 @@ def _load_oracle_bronze_incremental(
             if last_watermark:
                 wm_str = str(last_watermark)
                 
-                # MELHORIA 1+2: Cutoff = watermark - lookback_days (strict >)
+                # MELHORIA 1+2: Cutoff = watermark - lookback_days (inclusive >=)
                 # Calcula cutoff em Python para evitar problemas com INTERVAL via JDBC Oracle
                 from datetime import datetime as _dt, timedelta as _td
                 try:
@@ -1797,11 +1797,11 @@ def _load_oracle_bronze_incremental(
                     print(f"[INCREMENTAL] SHORT-CIRCUIT: Verificando late-arriving data (lookback {lookback_days} dias)...")
                     short_circuited = True
                 
-                # Query final: > (strict) com lookback safety net
-                query = f"(SELECT * FROM {oracle_table} WHERE {watermark_col} > {cutoff_expr}) src"
+                # Query final: >= (inclusive, padrão mercado) com lookback safety net
+                query = f"(SELECT * FROM {oracle_table} WHERE {watermark_col} >= {cutoff_expr}) src"
                 watermark_cutoff = f"{wm_str} - {lookback_days} dias"
-                print(f"[INCREMENTAL] COM PK: WHERE {watermark_col} > (watermark - {lookback_days} dias)")
-                print(f"[INCREMENTAL] COM PK: Query efetiva: WHERE {watermark_col} > TO_TIMESTAMP('{wm_str}') - {lookback_days} DAY")
+                print(f"[INCREMENTAL] COM PK: WHERE {watermark_col} >= (watermark - {lookback_days} dias)")
+                print(f"[INCREMENTAL] COM PK: Query efetiva: WHERE {watermark_col} >= TO_TIMESTAMP('{_cutoff_str}')")
             else:
                 # Primeira execução com PK: full read
                 query = f"(SELECT * FROM {oracle_table}) src"

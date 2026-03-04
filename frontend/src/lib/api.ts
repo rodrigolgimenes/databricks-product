@@ -257,6 +257,12 @@ export const validatePk = (datasetId: string, pkColumns: string[], scope: 'bronz
   });
 
 // Run detail types (enterprise 3-layer architecture)
+export interface WatermarkInfo {
+  column?: string;
+  type?: string;
+  current_value?: string;
+}
+
 export interface DatasetContext {
   incremental_strategy?: string;
   incremental_metadata?: string | Record<string, any>;
@@ -264,6 +270,7 @@ export interface DatasetContext {
   discovery_suggestion?: string;
   enable_incremental?: boolean;
   strategy_decision_log?: string | any[];
+  watermark_info?: WatermarkInfo;
 }
 
 export interface PreviousRun {

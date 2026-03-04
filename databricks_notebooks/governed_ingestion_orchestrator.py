@@ -739,30 +739,40 @@ def _sync_schema_with_incremental(dataset_id: str, schema: Dict[str, Any], ds: D
     
     needs_update = False
     
-    # Enrich watermark if missing in schema but present in incremental_metadata
-    if wm_col and not schema_wm:
-        wm_type = "string"
-        for c in (schema.get("columns") or []):
-            if c["name"] == wm_col:
-                wm_type = "timestamp" if "timestamp" in str(c.get("type", "")).lower() else "string"
-                break
-        schema["watermark"] = {"column": wm_col, "type": wm_type}
-        needs_update = True
-        print(f"[SYNC_SCHEMA] ✓ Watermark adicionado ao schema: {wm_col} ({wm_type})")
-    
-    # Enrich PK if missing in schema but present in incremental_metadata
-    if pk and not schema_pk:
-        schema["primary_key"] = pk
-        needs_update = True
-        print(f"[SYNC_SCHEMA] ✓ Primary Key adicionada ao schema: {pk}")
-    
-    # order_column is required by _dedupe_lww when PK is set
-    if (schema.get("primary_key") or []) and not schema.get("order_column"):
-        _order_col = wm_col or (schema.get("watermark") or {}).get("column")
-        if _order_col:
-            schema["order_column"] = _order_col
+    # Sync watermark: add if missing OR correct if mismatched with incremental_metadata
+    if wm_col:
+        existing_wm_col = (schema_wm or {}).get("column")
+        if not schema_wm or existing_wm_col != wm_col:
+            wm_type = "string"
+            for c in (schema.get("columns") or []):
+                if c["name"] == wm_col:
+                    wm_type = "timestamp" if "timestamp" in str(c.get("type", "")).lower() else "string"
+                    break
+            schema["watermark"] = {"column": wm_col, "type": wm_type}
             needs_update = True
-            print(f"[SYNC_SCHEMA] ✓ order_column definido: {_order_col}")
+            if existing_wm_col and existing_wm_col != wm_col:
+                print(f"[SYNC_SCHEMA] ⚠️ Watermark column CORRIGIDO: {existing_wm_col} → {wm_col} ({wm_type})")
+            else:
+                print(f"[SYNC_SCHEMA] ✓ Watermark adicionado ao schema: {wm_col} ({wm_type})")
+    
+    # Sync PK: add if missing OR correct if mismatched with incremental_metadata
+    if pk:
+        if not schema_pk or set(schema_pk) != set(pk):
+            old_pk = schema_pk
+            schema["primary_key"] = pk
+            needs_update = True
+            if old_pk and set(old_pk) != set(pk):
+                print(f"[SYNC_SCHEMA] ⚠️ Primary Key CORRIGIDA: {old_pk} → {pk}")
+            else:
+                print(f"[SYNC_SCHEMA] ✓ Primary Key adicionada ao schema: {pk}")
+    
+    # order_column: add if missing OR correct if watermark changed
+    _desired_order = wm_col or (schema.get("watermark") or {}).get("column")
+    if (schema.get("primary_key") or []) and _desired_order:
+        if schema.get("order_column") != _desired_order:
+            schema["order_column"] = _desired_order
+            needs_update = True
+            print(f"[SYNC_SCHEMA] ✓ order_column definido: {_desired_order}")
     
     if needs_update:
         # Persist updated schema to schema_versions (UPDATE existing ACTIVE row)
@@ -1866,11 +1876,41 @@ def run_one(item: Dict[str, Any]) -> Dict[str, Any]:
                 
                 print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] [DEBUG] Decision vars: enable_incremental={enable_incremental}, wm_col={repr(wm_col)}, last_wm_value={repr(last_wm_value)}, bronze_mode={repr(bronze_mode)}, pk_cols={pk_cols}")
                 
+                # --- 4b. Short-circuit check (detect new data before full read) ---
+                # Padrão Fivetran/Airbyte: query leve para verificar se há dados novos
+                # acima do watermark salvo. Se não há → pula MERGE Bronze+Silver.
+                supabase_short_circuited = False
+                if enable_incremental and wm_col and last_wm_value and pk_cols and bronze_mode == "CURRENT":
+                    try:
+                        _sc_query = f"""(SELECT MAX(\"{wm_col}\") AS max_wm FROM {source_table_fqn} WHERE \"{wm_col}\" > '{last_wm_value}'::timestamp) AS sc_q"""
+                        print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] SHORT-CIRCUIT: Verificando dados novos acima do watermark...")
+                        _sc_df = (
+                            spark.read.format("jdbc")  # type: ignore[name-defined]
+                            .option("url", supabase_jdbc_url)
+                            .option("dbtable", _sc_query)
+                            .option("user", supabase_user)
+                            .option("password", supabase_password)
+                            .option("driver", "org.postgresql.Driver")
+                            .load()
+                        )
+                        _sc_rows = _sc_df.collect()
+                        _has_new_data = bool(_sc_rows and _sc_rows[0]["max_wm"] is not None)
+                        _sc_max = str(_sc_rows[0]["max_wm"]) if _has_new_data else None
+                        print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] SHORT-CIRCUIT: has_new_data={_has_new_data}, max_wm_na_origem={_sc_max}")
+                        
+                        if not _has_new_data:
+                            supabase_short_circuited = True
+                            print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] SHORT-CIRCUIT: ⚡ Nenhum dado NOVO acima do watermark")
+                            print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] SHORT-CIRCUIT: Verificando late-arriving data (lookback {lookback_days} dias)...")
+                    except Exception as _sc_err:
+                        # Se short-circuit falhar, assume que há dados (fallback seguro)
+                        print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] SHORT-CIRCUIT: Erro na verificação (prosseguindo com leitura): {_sc_err}")
+                
                 # --- 5. Build JDBC query ---
                 dbtable = source_table_fqn
                 
                 if enable_incremental and wm_col and last_wm_value:
-                    # ---- INCREMENTAL: filter source by watermark ----
+                    # ---- INCREMENTAL: filter source by watermark (>= inclusive, padrão mercado) ----
                     # Decide if we CAN do incremental based on bronze_mode
                     if bronze_mode == "CURRENT" and pk_cols:
                         # MERGE by PK — read only delta from source
@@ -2037,7 +2077,21 @@ def run_one(item: Dict[str, Any]) -> Dict[str, Any]:
                 # --- 9. Track results ---
                 bronze_count = int(spark.table(bronze_table).count())  # type: ignore[name-defined]
                 
-                if is_incremental_run:
+                # SHORT-CIRCUIT: Se não há dados novos E lookback retornou 0 rows no MERGE → skip
+                if supabase_short_circuited and _merge_inserted == 0 and (_merge_updated is None or _merge_updated == 0):
+                    # Nenhum dado novo e nenhuma alteração real no lookback → ativar short-circuit completo
+                    is_short_circuited = True
+                    load_type = "INCREMENTAL"
+                    incremental_rows_read = 0
+                    watermark_start = last_wm_value
+                    watermark_end = last_wm_value
+                    print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] ⚡ SHORT-CIRCUIT ATIVADO: Sem dados novos, lookback sem alterações reais")
+                    print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] ⚡ Watermark permanece em: {last_wm_value}")
+                elif supabase_short_circuited:
+                    # Short-circuit detectou sem dados novos, mas lookback encontrou late-arriving data
+                    print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] ⚠ Late-arriving data detectado no lookback (inserted={_merge_inserted}, updated={_merge_updated})")
+                
+                if is_incremental_run and not is_short_circuited:
                     load_type = "INCREMENTAL"
                     # Count only rows from this batch (affected by MERGE or APPEND)
                     try:
@@ -2061,7 +2115,7 @@ def run_one(item: Dict[str, Any]) -> Dict[str, Any]:
                         except Exception as _wms_err:
                             print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] ⚠ Erro ao capturar watermark range: {_wms_err}")
                 
-                print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] ✓ Carga concluída: {bronze_count:,} linhas (load_type={load_type})")
+                print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] ✓ Carga concluída: {bronze_count:,} linhas (load_type={load_type}, short_circuit={is_short_circuited})")
                 if is_incremental_run and incremental_rows_read is not None:
                     print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] Linhas incrementais neste batch: {incremental_rows_read:,}")
                 print(f"[{now_utc_iso()}] [BRONZE:SUPABASE] ========== Carga Supabase finalizada ==========\n")
@@ -2071,7 +2125,7 @@ def run_one(item: Dict[str, Any]) -> Dict[str, Any]:
                     dataset_id=dataset_id,
                     layer="BRONZE",
                     table_name=bronze_table,
-                    operation=operation_type,
+                    operation="SHORT_CIRCUIT" if is_short_circuited else operation_type,
                     status="SUCCEEDED",
                     row_count=bronze_count,
                     inserted_count=_merge_inserted,
@@ -2091,17 +2145,20 @@ def run_one(item: Dict[str, Any]) -> Dict[str, Any]:
                         "pk_cols": pk_cols,
                         "last_wm_value": last_wm_value,
                         "is_incremental_run": is_incremental_run,
+                        "is_short_circuited": is_short_circuited,
+                        "supabase_short_circuited": supabase_short_circuited,
                         "operation_type": operation_type,
                         "load_type": load_type,
                         "dbtable": dbtable[:200] if dbtable else None,
                     }
                 }
+                _sc_msg = "supabase bronze short-circuited (no new data)" if is_short_circuited else (f"supabase bronze loaded ({bronze_count} rows" + (", incremental" if is_incremental_run else "") + ")")
                 _update_step(
                     step_id=bronze_step,
                     status="SUCCEEDED",
                     progress_current=bronze_count,
                     finished=True,
-                    message=f"supabase bronze loaded ({bronze_count} rows" + (", incremental" if is_incremental_run else "") + ")",
+                    message=_sc_msg,
                     details=_debug_details,
                 )
             except Exception as e:
