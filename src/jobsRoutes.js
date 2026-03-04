@@ -24,7 +24,7 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
   // Helper function to calculate next run time
   function calculateNextRun(scheduleType, cronExpression, timezone) {
     try {
-      if (scheduleType === 'CRON' && cronExpression) {
+      if (cronExpression) {
         const interval = CronExpressionParser.parse(cronExpression, {
           tz: timezone || 'America/Sao_Paulo'
         });
@@ -34,6 +34,23 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
     } catch (e) {
       console.warn('[JOBS] Error calculating next run:', e.message);
       return null;
+    }
+  }
+
+  // Helper: recalculate and persist next_run_at for a job
+  async function updateNextRunAt(jobId, scheduleType, cronExpression, timezone) {
+    try {
+      const nextRun = calculateNextRun(scheduleType, cronExpression, timezone);
+      if (nextRun) {
+        const nextRunStr = nextRun.toISOString().replace('T', ' ').replace('Z', '');
+        await db.query(
+          `UPDATE ${portalCfg.ctrlSchema}.scheduled_jobs ` +
+          `SET next_run_at = TIMESTAMP ${sqlStringLiteral(nextRunStr)} ` +
+          `WHERE job_id = ${sqlStringLiteral(jobId)}`
+        );
+      }
+    } catch (e) {
+      console.warn(`[JOBS] Error updating next_run_at for job ${jobId}:`, e.message);
     }
   }
 
@@ -263,6 +280,18 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
           `    last_run_duration_ms = ${durationMs} ` +
           `WHERE job_id = ${sqlStringLiteral(exec.job_id)}`
         );
+
+        // Recalculate next_run_at
+        try {
+          const jobRow = await sqlQueryObjects(
+            `SELECT schedule_type, cron_expression, timezone, enabled FROM ${portalCfg.ctrlSchema}.scheduled_jobs WHERE job_id = ${sqlStringLiteral(exec.job_id)} LIMIT 1`
+          );
+          if (jobRow.length > 0 && String(jobRow[0].enabled) === 'true') {
+            await updateNextRunAt(exec.job_id, jobRow[0].schedule_type, jobRow[0].cron_expression, jobRow[0].timezone);
+          }
+        } catch (nrErr) {
+          console.warn(`[JOBS] Warning: Failed to update next_run_at for ${exec.job_id}:`, nrErr.message);
+        }
 
         // Cleanup: cancel ALL remaining PENDING/CLAIMED items in run_queue for this job
         try {
@@ -708,6 +737,29 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
 
         if (latestExec.length > 0) {
           job.latest_execution_status = latestExec[0].status;
+        }
+
+        // Refresh next_run_at if stale or null for enabled jobs with cron
+        if (String(job.enabled) === 'true' && job.cron_expression) {
+          const now = new Date();
+          const currentNext = job.next_run_at ? new Date(job.next_run_at) : null;
+          if (!currentNext || currentNext < now) {
+            try {
+              const nextRun = calculateNextRun(job.schedule_type, job.cron_expression, job.timezone);
+              if (nextRun) {
+                job.next_run_at = nextRun.toISOString();
+                // Persist in background (non-blocking)
+                const nextRunStr = nextRun.toISOString().replace('T', ' ').replace('Z', '');
+                db.query(
+                  `UPDATE ${portalCfg.ctrlSchema}.scheduled_jobs ` +
+                  `SET next_run_at = TIMESTAMP ${sqlStringLiteral(nextRunStr)} ` +
+                  `WHERE job_id = ${sqlStringLiteral(job.job_id)}`
+                ).catch(e => console.warn('[JOBS] next_run_at update failed:', e.message));
+              }
+            } catch (nrErr) {
+              // non-fatal
+            }
+          }
         }
       }
 
@@ -1368,6 +1420,18 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         `    last_run_duration_ms = ${durationMs} ` +
         `WHERE job_id = ${sqlStringLiteral(job_id)}`
       );
+
+      // 5. Recalculate next_run_at
+      try {
+        const jobRow = await sqlQueryObjects(
+          `SELECT schedule_type, cron_expression, timezone, enabled FROM ${portalCfg.ctrlSchema}.scheduled_jobs WHERE job_id = ${sqlStringLiteral(job_id)} LIMIT 1`
+        );
+        if (jobRow.length > 0 && String(jobRow[0].enabled) === 'true') {
+          await updateNextRunAt(job_id, jobRow[0].schedule_type, jobRow[0].cron_expression, jobRow[0].timezone);
+        }
+      } catch (nrErr) {
+        console.warn(`[JOBS] Warning: Failed to update next_run_at after cancel:`, nrErr.message);
+      }
 
       console.log(`[JOBS] Execution ${exec.execution_id} cancelled by ${user}`);
 
