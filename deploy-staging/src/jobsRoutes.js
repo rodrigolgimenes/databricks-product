@@ -264,18 +264,13 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
           `WHERE job_id = ${sqlStringLiteral(exec.job_id)}`
         );
 
-        // Cleanup: cancel any remaining PENDING/CLAIMED items in run_queue for this execution
+        // Cleanup: cancel ALL remaining PENDING/CLAIMED items in run_queue for this job
         try {
-          const execStartedAtClean = exec.started_at
-            ? String(exec.started_at).replace('T', ' ').replace('Z', '').substring(0, 19)
-            : new Date(startMs).toISOString().replace('T', ' ').replace('Z', '').substring(0, 19);
           await db.query(
             `UPDATE ${portalCfg.opsSchema}.run_queue ` +
             `SET status = 'CANCELLED' ` +
             `WHERE correlation_id = ${sqlStringLiteral(exec.job_id)} ` +
-            `AND status IN ('PENDING', 'CLAIMED') ` +
-            `AND requested_at BETWEEN (TIMESTAMP ${sqlStringLiteral(execStartedAtClean)} - INTERVAL 30 SECONDS) ` +
-            `AND (TIMESTAMP ${sqlStringLiteral(execStartedAtClean)} + INTERVAL 30 SECONDS)`
+            `AND status IN ('PENDING', 'CLAIMED')`
           );
           console.log(`[JOBS] Cleaned up stale queue items for execution ${exec.execution_id}`);
         } catch (cleanupErr) {
@@ -1226,7 +1221,20 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         console.warn(`[JOBS] Warning: Failed to sync timeout for job ${job_id}:`, timeoutErr.message);
       }
 
-      // Enqueue datasets first
+      // Cleanup: cancel any stale PENDING/CLAIMED items from previous executions
+      try {
+        await db.query(
+          `UPDATE ${portalCfg.opsSchema}.run_queue ` +
+          `SET status = 'CANCELLED' ` +
+          `WHERE correlation_id = ${sqlStringLiteral(job_id)} ` +
+          `AND status IN ('PENDING', 'CLAIMED')`
+        );
+        console.log(`[JOBS] Cleaned up stale queue items before new run for job ${job_id}`);
+      } catch (cleanupErr) {
+        console.warn(`[JOBS] Warning: Failed to cleanup stale queue items:`, cleanupErr.message);
+      }
+
+      // Enqueue datasets
       const datasets = await sqlQueryObjects(
         `SELECT dataset_id FROM ${portalCfg.ctrlSchema}.job_datasets 
          WHERE job_id = ${sqlStringLiteral(job_id)} AND enabled = true
@@ -1344,17 +1352,12 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         `WHERE execution_id = ${sqlStringLiteral(exec.execution_id)}`
       );
 
-      // 3. Cancel PENDING/CLAIMED items in run_queue
-      const execStartedAt = exec.started_at
-        ? String(exec.started_at).replace('T', ' ').replace('Z', '').substring(0, 19)
-        : now.substring(0, 19);
+      // 3. Cancel ALL PENDING/CLAIMED items in run_queue for this job
       await db.query(
         `UPDATE ${portalCfg.opsSchema}.run_queue ` +
         `SET status = 'CANCELLED' ` +
         `WHERE correlation_id = ${sqlStringLiteral(job_id)} ` +
-        `AND status IN ('PENDING', 'CLAIMED') ` +
-        `AND requested_at BETWEEN (TIMESTAMP ${sqlStringLiteral(execStartedAt)} - INTERVAL 30 SECONDS) ` +
-        `AND (TIMESTAMP ${sqlStringLiteral(execStartedAt)} + INTERVAL 30 SECONDS)`
+        `AND status IN ('PENDING', 'CLAIMED')`
       );
 
       // 4. Update scheduled_jobs
