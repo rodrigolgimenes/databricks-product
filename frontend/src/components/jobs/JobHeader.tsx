@@ -5,7 +5,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import {
   ArrowLeft, Play, Pause, Edit, RefreshCw, Trash2,
   Loader2, AlertTriangle, ExternalLink, Zap, Timer,
-  ShieldCheck, ShieldAlert, ShieldX,
+  ShieldCheck, ShieldAlert, ShieldX, Square,
 } from 'lucide-react';
 import { Job, getStatusIcon, getStatusBadge } from './helpers';
 import { RiskLevel } from '@/lib/job-health';
@@ -18,6 +18,7 @@ interface JobHeaderProps {
   refreshing: boolean;
   syncing: boolean;
   deleting: boolean;
+  cancelling?: boolean;
   riskLevel?: RiskLevel;
   riskReasons?: string[];
   onRefresh: () => void;
@@ -27,6 +28,7 @@ interface JobHeaderProps {
   onDelete: () => void;
   onEdit: () => void;
   onBack: () => void;
+  onCancel?: () => void;
 }
 
 const RISK_CONFIG: Record<RiskLevel, { icon: typeof ShieldCheck; color: string; badgeClass: string; label: string }> = {
@@ -81,10 +83,11 @@ function ActionButton({
 
 export function JobHeader({
   job, recentExecutions, activeQueue,
-  refreshing, syncing, deleting,
+  refreshing, syncing, deleting, cancelling,
   riskLevel, riskReasons,
-  onRefresh, onRunNow, onToggle, onSync, onDelete, onEdit, onBack,
+  onRefresh, onRunNow, onToggle, onSync, onDelete, onEdit, onBack, onCancel,
 }: JobHeaderProps) {
+  const hasRunningExecution = recentExecutions.some((e) => e.status === 'RUNNING');
   return (
     <>
       {/* Header */}
@@ -117,12 +120,26 @@ export function JobHeader({
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
           </ActionButton>
-          <ActionButton
-            variant="outline" size="sm" onClick={onRunNow}
-            tooltip={FIELD_EXPLANATIONS.action_run_now}
-          >
-            <Play className="h-4 w-4 mr-1" /> Executar Agora
-          </ActionButton>
+          {hasRunningExecution && onCancel ? (
+            <ActionButton
+              variant="outline" size="sm" onClick={onCancel} disabled={cancelling}
+              tooltip="Cancelar a execução em andamento"
+              className="border-red-300 text-red-700 hover:bg-red-50"
+            >
+              {cancelling ? (
+                <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Cancelando...</>
+              ) : (
+                <><Square className="h-4 w-4 mr-1" /> Cancelar Execução</>
+              )}
+            </ActionButton>
+          ) : (
+            <ActionButton
+              variant="outline" size="sm" onClick={onRunNow}
+              tooltip={FIELD_EXPLANATIONS.action_run_now}
+            >
+              <Play className="h-4 w-4 mr-1" /> Executar Agora
+            </ActionButton>
+          )}
           <ActionButton
             variant="outline" size="sm" onClick={onToggle}
             tooltip={FIELD_EXPLANATIONS.action_toggle}

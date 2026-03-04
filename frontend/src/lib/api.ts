@@ -465,6 +465,8 @@ export const toggleJob = (jobId: string) =>
   request(`/jobs/${jobId}/toggle`, { method: "POST" });
 export const runJobNow = (jobId: string) =>
   request(`/jobs/${jobId}/run-now`, { method: "POST" });
+export const cancelJob = (jobId: string) =>
+  request(`/jobs/${jobId}/cancel`, { method: "POST" });
 export const getJobRuns = (jobId: string, params: { limit?: number; offset?: number } = {}) => {
   const qs = new URLSearchParams();
   if (params.limit) qs.set("limit", String(params.limit));

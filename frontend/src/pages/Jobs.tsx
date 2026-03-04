@@ -42,6 +42,7 @@ import {
   Filter,
   Loader2,
   AlertTriangle,
+  Square,
 } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -94,6 +95,8 @@ const Jobs = () => {
 
   // Run-now loading state
   const [runningJobId, setRunningJobId] = useState<string | null>(null);
+  // Cancel loading state
+  const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
 
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
@@ -174,7 +177,7 @@ const Jobs = () => {
       return s === 'RUNNING';
     });
     if (!hasRunning) return;
-    const id = setTimeout(() => fetchJobs(true), 15000);
+    const id = setTimeout(() => fetchJobs(true), 8000);
     return () => clearTimeout(id);
   }, [jobs]);
 
@@ -204,6 +207,21 @@ const Jobs = () => {
       }
     } finally {
       setRunningJobId(null);
+    }
+  };
+
+  const handleCancelJob = async (jobId: string) => {
+    if (cancellingJobId) return;
+    setCancellingJobId(jobId);
+    try {
+      const result = await api.cancelJob(jobId);
+      toast.success(result.message || 'Job cancelado com sucesso!');
+      fetchJobs();
+    } catch (error: any) {
+      console.error('Error cancelling job:', error);
+      toast.error(`Erro ao cancelar job: ${error.message}`);
+    } finally {
+      setCancellingJobId(null);
     }
   };
 
@@ -531,26 +549,45 @@ const Jobs = () => {
                       {/* Ações */}
                       <TableCell className="overflow-hidden text-right">
                         <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 w-7 p-0"
-                                onClick={() => handleRunNow(job.job_id)}
-                                disabled={runningJobId === job.job_id || isJobRunning}
-                              >
-                                {runningJobId === job.job_id ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <Play className="h-3 w-3" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              {isJobRunning ? 'Job já em execução' : 'Executar agora'}
-                            </TooltipContent>
-                          </Tooltip>
+                          {isJobRunning ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                  onClick={() => handleCancelJob(job.job_id)}
+                                  disabled={cancellingJobId === job.job_id}
+                                >
+                                  {cancellingJobId === job.job_id ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <Square className="h-3 w-3" />
+                                  )}
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Cancelar execução</TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0"
+                                  onClick={() => handleRunNow(job.job_id)}
+                                  disabled={!!runningJobId}
+                                >
+                                  {runningJobId === job.job_id ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <Play className="h-3 w-3" />
+                                  )}
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Executar agora</TooltipContent>
+                            </Tooltip>
+                          )}
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => handleToggleJob(job.job_id, job.enabled)}>

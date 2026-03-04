@@ -33,6 +33,7 @@ const JobDetails = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
   const [runNowOpen, setRunNowOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -128,6 +129,21 @@ const JobDetails = () => {
     }
   };
 
+  const handleCancel = async () => {
+    if (!jobId) return;
+    setCancelling(true);
+    try {
+      const result = await api.cancelJob(jobId);
+      toast.success(result.message || 'Job cancelado com sucesso!');
+      setTimeout(handleRefresh, 2000);
+    } catch (error: any) {
+      console.error('Error cancelling job:', error);
+      toast.error(`Erro ao cancelar job: ${error.message}`);
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const handleSync = async () => {
     if (!jobId) return;
     setSyncing(true);
@@ -218,6 +234,7 @@ const JobDetails = () => {
         refreshing={refreshing}
         syncing={syncing}
         deleting={deleting}
+        cancelling={cancelling}
         riskLevel={risk.level}
         riskReasons={risk.reasons}
         onRefresh={handleRefresh}
@@ -227,6 +244,7 @@ const JobDetails = () => {
         onDelete={() => setDeleteOpen(true)}
         onEdit={() => navigate(`/jobs/${jobId}/edit`)}
         onBack={() => navigate('/jobs')}
+        onCancel={handleCancel}
       />
 
       <JobMetricsCards

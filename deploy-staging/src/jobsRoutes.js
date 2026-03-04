@@ -264,6 +264,24 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
           `WHERE job_id = ${sqlStringLiteral(exec.job_id)}`
         );
 
+        // Cleanup: cancel any remaining PENDING/CLAIMED items in run_queue for this execution
+        try {
+          const execStartedAtClean = exec.started_at
+            ? String(exec.started_at).replace('T', ' ').replace('Z', '').substring(0, 19)
+            : new Date(startMs).toISOString().replace('T', ' ').replace('Z', '').substring(0, 19);
+          await db.query(
+            `UPDATE ${portalCfg.opsSchema}.run_queue ` +
+            `SET status = 'CANCELLED' ` +
+            `WHERE correlation_id = ${sqlStringLiteral(exec.job_id)} ` +
+            `AND status IN ('PENDING', 'CLAIMED') ` +
+            `AND requested_at BETWEEN (TIMESTAMP ${sqlStringLiteral(execStartedAtClean)} - INTERVAL 30 SECONDS) ` +
+            `AND (TIMESTAMP ${sqlStringLiteral(execStartedAtClean)} + INTERVAL 30 SECONDS)`
+          );
+          console.log(`[JOBS] Cleaned up stale queue items for execution ${exec.execution_id}`);
+        } catch (cleanupErr) {
+          console.warn(`[JOBS] Warning: Failed to cleanup queue for ${exec.execution_id}:`, cleanupErr.message);
+        }
+
         // Update in-memory array
         const idx = updated.findIndex(e => e.execution_id === exec.execution_id);
         if (idx >= 0) {
@@ -676,12 +694,23 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
         job.dataset_count = datasetCount[0]?.count || 0;
 
         // Latest execution status from history
-        const latestExec = await sqlQueryObjects(
-          `SELECT status, started_at, finished_at
+        let latestExec = await sqlQueryObjects(
+          `SELECT execution_id, job_id, databricks_run_id, status, started_at, finished_at, datasets_total
            FROM ${portalCfg.ctrlSchema}.job_execution_history
            WHERE job_id = ${sqlStringLiteral(job.job_id)}
            ORDER BY started_at DESC LIMIT 1`
         );
+
+        // If latest execution is RUNNING/PENDING, sync with Databricks to detect cancel/finish
+        if (latestExec.length > 0 && ['RUNNING', 'PENDING'].includes(latestExec[0].status)) {
+          try {
+            const synced = await syncRunningExecutions(latestExec);
+            latestExec = synced;
+          } catch (syncErr) {
+            console.warn(`[JOBS] Warning: sync failed for job ${job.job_id}:`, syncErr.message);
+          }
+        }
+
         if (latestExec.length > 0) {
           job.latest_execution_status = latestExec[0].status;
         }
@@ -1257,6 +1286,96 @@ module.exports = function(app, db, portalCfg, sqlStringLiteral, sqlQueryObjects,
 
     } catch (error) {
       console.error('[JOBS] Error running job:', error);
+      return res.status(500).json({
+        ok: false,
+        error: 'INTERNAL_ERROR',
+        message: error.message
+      });
+    }
+  });
+
+  // ==================== CANCEL JOB EXECUTION ====================
+  app.post('/api/portal/jobs/:job_id/cancel', async (req, res) => {
+    const { job_id } = req.params;
+    const user = getRequestUser(req);
+    console.log('[JOBS] POST /jobs/:job_id/cancel - Cancelling job execution, job_id:', job_id);
+
+    try {
+      // Find the RUNNING/PENDING execution for this job
+      const runningExecs = await sqlQueryObjects(
+        `SELECT execution_id, databricks_run_id, started_at, datasets_total
+         FROM ${portalCfg.ctrlSchema}.job_execution_history
+         WHERE job_id = ${sqlStringLiteral(job_id)}
+         AND status IN ('RUNNING', 'PENDING')
+         ORDER BY started_at DESC LIMIT 1`
+      );
+
+      if (runningExecs.length === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: 'NO_RUNNING_EXECUTION',
+          message: 'Nenhuma execução em andamento para cancelar.'
+        });
+      }
+
+      const exec = runningExecs[0];
+      const now = new Date().toISOString().replace('T', ' ').replace('Z', '');
+      const startMs = exec.started_at ? new Date(exec.started_at).getTime() : Date.now();
+      const durationMs = Date.now() - startMs;
+
+      // 1. Cancel the Databricks run
+      if (exec.databricks_run_id) {
+        try {
+          await jobsApi.cancelRun(exec.databricks_run_id);
+          console.log(`[JOBS] Cancelled Databricks run ${exec.databricks_run_id}`);
+        } catch (dbErr) {
+          console.warn(`[JOBS] Warning: Could not cancel Databricks run ${exec.databricks_run_id}:`, dbErr.message);
+          // Continue — the run may have already finished
+        }
+      }
+
+      // 2. Update execution history
+      await db.query(
+        `UPDATE ${portalCfg.ctrlSchema}.job_execution_history ` +
+        `SET status = 'CANCELLED', ` +
+        `    finished_at = TIMESTAMP ${sqlStringLiteral(now)}, ` +
+        `    duration_ms = ${durationMs}, ` +
+        `    error_message = ${sqlStringLiteral('Cancelado manualmente por ' + user)} ` +
+        `WHERE execution_id = ${sqlStringLiteral(exec.execution_id)}`
+      );
+
+      // 3. Cancel PENDING/CLAIMED items in run_queue
+      const execStartedAt = exec.started_at
+        ? String(exec.started_at).replace('T', ' ').replace('Z', '').substring(0, 19)
+        : now.substring(0, 19);
+      await db.query(
+        `UPDATE ${portalCfg.opsSchema}.run_queue ` +
+        `SET status = 'CANCELLED' ` +
+        `WHERE correlation_id = ${sqlStringLiteral(job_id)} ` +
+        `AND status IN ('PENDING', 'CLAIMED') ` +
+        `AND requested_at BETWEEN (TIMESTAMP ${sqlStringLiteral(execStartedAt)} - INTERVAL 30 SECONDS) ` +
+        `AND (TIMESTAMP ${sqlStringLiteral(execStartedAt)} + INTERVAL 30 SECONDS)`
+      );
+
+      // 4. Update scheduled_jobs
+      await db.query(
+        `UPDATE ${portalCfg.ctrlSchema}.scheduled_jobs ` +
+        `SET last_run_at = TIMESTAMP ${sqlStringLiteral(now)}, ` +
+        `    last_run_status = 'CANCELLED', ` +
+        `    last_run_duration_ms = ${durationMs} ` +
+        `WHERE job_id = ${sqlStringLiteral(job_id)}`
+      );
+
+      console.log(`[JOBS] Execution ${exec.execution_id} cancelled by ${user}`);
+
+      return res.json({
+        ok: true,
+        execution_id: exec.execution_id,
+        message: 'Execução cancelada com sucesso.'
+      });
+
+    } catch (error) {
+      console.error('[JOBS] Error cancelling job:', error);
       return res.status(500).json({
         ok: false,
         error: 'INTERNAL_ERROR',
