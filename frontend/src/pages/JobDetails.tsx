@@ -20,6 +20,7 @@ import {
   getStatusDistribution,
   buildSparklineData,
 } from '@/lib/job-health';
+import { toast } from 'sonner';
 
 const JobDetails = () => {
   const navigate = useNavigate();
@@ -111,13 +112,19 @@ const JobDetails = () => {
   const handleRunNow = async () => {
     if (!jobId) return;
     try {
-      await api.runJobNow(jobId);
+      const result = await api.runJobNow(jobId);
+      toast.success(`Job iniciado com sucesso! ${result.message || ''}`);
       setRunNowOpen(false);
       setActiveTab('overview');
       setTimeout(handleRefresh, 2000);
     } catch (error: any) {
       console.error('Error running job:', error);
-      alert(`Erro ao executar job: ${error.message}`);
+      if (error.message?.includes('em andamento')) {
+        toast.warning(error.message);
+      } else {
+        toast.error(`Erro ao executar job: ${error.message}`);
+      }
+      throw error; // re-throw so RunNowDialog keeps dialog open
     }
   };
 

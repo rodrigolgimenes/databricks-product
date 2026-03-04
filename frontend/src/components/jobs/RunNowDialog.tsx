@@ -64,7 +64,10 @@ export function RunNowDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={running}>
             Cancelar
           </Button>
-          <Button onClick={handleConfirm} disabled={running}>
+          <Button
+            onClick={handleConfirm}
+            disabled={running || (hasActiveExecution && maxConcurrentRuns <= 1)}
+          >
             {running ? (
               <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Iniciando...</>
             ) : (

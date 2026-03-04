@@ -53,6 +53,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import * as api from '@/lib/api';
+import { toast } from 'sonner';
 
 interface Job {
   job_id: string;
@@ -90,6 +91,9 @@ const Jobs = () => {
 
   const [projects, setProjects] = useState<any[]>([]);
   const [areas, setAreas] = useState<any[]>([]);
+
+  // Run-now loading state
+  const [runningJobId, setRunningJobId] = useState<string | null>(null);
 
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
@@ -185,15 +189,21 @@ const Jobs = () => {
   };
 
   const handleRunNow = async (jobId: string) => {
-    if (!confirm('Tem certeza que deseja executar este job agora?')) return;
-    
+    if (runningJobId) return; // already processing a run
+    setRunningJobId(jobId);
     try {
       const result = await api.runJobNow(jobId);
-      alert(`Job iniciado! Run ID: ${result.databricks_run_id}`);
+      toast.success(`Job iniciado com sucesso! ${result.message || ''}`);
       fetchJobs();
     } catch (error: any) {
       console.error('Error running job:', error);
-      alert(`Erro ao executar job: ${error.message}`);
+      if (error.message?.includes('em andamento')) {
+        toast.warning(error.message);
+      } else {
+        toast.error(`Erro ao executar job: ${error.message}`);
+      }
+    } finally {
+      setRunningJobId(null);
     }
   };
 
@@ -428,6 +438,7 @@ const Jobs = () => {
               ) : (
                 filteredJobs.map((job) => {
                   const statusInfo = getStatusDisplay(job);
+                  const isJobRunning = (job.latest_execution_status || job.last_run_status || '').toUpperCase() === 'RUNNING';
                   return (
                     <TableRow
                       key={job.job_id}
@@ -522,11 +533,23 @@ const Jobs = () => {
                         <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => handleRunNow(job.job_id)}>
-                                <Play className="h-3 w-3" />
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0"
+                                onClick={() => handleRunNow(job.job_id)}
+                                disabled={runningJobId === job.job_id || isJobRunning}
+                              >
+                                {runningJobId === job.job_id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Play className="h-3 w-3" />
+                                )}
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent>Executar agora</TooltipContent>
+                            <TooltipContent>
+                              {isJobRunning ? 'Job já em execução' : 'Executar agora'}
+                            </TooltipContent>
                           </Tooltip>
                           <Tooltip>
                             <TooltipTrigger asChild>
